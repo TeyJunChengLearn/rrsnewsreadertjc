@@ -1,5 +1,6 @@
 // lib/screens/article_webview_page.dart
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -8,7 +9,7 @@ import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 
 import '../providers/settings_provider.dart';
-
+import '../services/readability_service.dart';
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
 String bcpFromTranslateLanguage(TranslateLanguage lang) {
   switch (lang) {
@@ -288,202 +289,98 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   void _initWebView() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..addJavaScriptChannel('flutterArticle', onMessageReceived: (msg) {
-        final parts = msg.message
-            .split('\n')
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toList();
-        if (!mounted) return;
-        setState(() {
-          _lines = parts;
-          _originalLinesCache ??= List<String>.from(parts);
-          _currentLine = 0;
-        });
-      })
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) => setState(() => _isLoading = true),
-          onPageFinished: (_) async {
-            setState(() => _isLoading = false);
-            if (_readerOn) await _injectReader();
-          },
+          onPageFinished: (_) => setState(() => _isLoading = false),
         ),
-      )
-      ..loadRequest(Uri.parse(widget.url));
-  }
+      );
+    if (_readerOn) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadReaderContent();
+      });
+    } else {
+      _controller.loadRequest(Uri.parse(widget.url));
+    }
+  }      
+  Future<void> _loadReaderContent() async {
+    setState(() {
+      _isLoading = true;
+      _isTranslatedView = false;
+      _originalLinesCache = null;
+    });
+          final readability = context.read<Readability4JExtended>();
+    ArticleReadabilityResult? result;
+    try {
+      result = await readability.extractMainContent(widget.url);
+    } catch (_) {
+      result = null;
+    }
+    if (!mounted) return;
+        if (result == null || (result.mainText?.trim().isEmpty ?? true)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to load reader view, showing website.')),
+      );
+      setState(() {
+        _readerOn = false;
+        _lines = [];
+        _currentLine = 0;
+        _isLoading = false;
+      });
+      await _controller.loadRequest(Uri.parse(widget.url));
+      return;
+    }
+  
 
-  Future<void> _injectReader() async {
-    const js = r"""
-      (function() {
-        function txt(el){return el?el.textContent.trim():'';}
-        function isJunk(s){
-          if (!s) return false;
-          s = s.toLowerCase();
-          return s.includes('advert')||s.includes('promo')||s.includes('social')||
-                s.includes('share')||s.includes('bookmark');
-        }
-        function esc(t){ return t.replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-        var titleEl = document.querySelector('h1,[data-component="headline"],.story-body__h1');
-        var title = txt(titleEl) || document.title || '';
-
-        var articleEl = document.querySelector('article') ||
-                        document.querySelector('main article') ||
-                        document.querySelector('main') ||
-                        document.querySelector('.story-body') ||
-                        document.querySelector('.gs-c-article-body') ||
-                        document.querySelector('.article-body') ||
-                        document.querySelector('.content');
-
-        // --- hero image: only from article or its direct parent ---
-        var imgSrc = '';
-        if (articleEl) {
-          var hero = articleEl.querySelector('figure img, img');
-          if (!hero && articleEl.parentElement) {
-            // fall back to a figure/img near the article, but not whole document
-            hero = articleEl.parentElement.querySelector('figure img, img');
-          }
-          if (hero) {
-            imgSrc = hero.getAttribute('src') || hero.getAttribute('data-src') || '';
-          }
-        }
-        // if articleEl is null, we leave imgSrc='' (no hero, to avoid logos)
-
-        var timeEl = document.querySelector('time,[data-testid="timestamp"]');
-        var timeTxt = txt(timeEl);
-
-        var idx = 0;
-        var htmlLines = [];
-        var plainLines = [];
-        var seenImg = {};
-
-        function pushLine(t, tag, cls){
-          if(!t) return;
-          var c='flutter-line'+(cls?(' '+cls):'');
-          htmlLines.push('<'+tag+' class="'+c+'" id="flutter-line-'+idx+'">'+esc(t)+'</'+tag+'>');
-          plainLines.push(t);
-          idx++;
-        }
-
-        // inline images only from article content (skip hero + duplicates)
-        function pushImg(src){
-          if(!src) return;
-
-          if (src === imgSrc) return;      // don't duplicate hero
-          if (seenImg[src]) return;
-          seenImg[src] = true;
-
-          htmlLines.push(
-            '<div class="flutter-line is-image" data-type="image" id="flutter-line-'+idx+'">' +
-              '<img src="'+src+'" class="inline-image" />' +
-            '</div>'
-          );
-          plainLines.push('__IMG__|' + src);
-          idx++;
-        }
-
-        pushLine(title,'h1','is-title');
-        if (timeTxt) pushLine(timeTxt,'div','is-time');
-
-        function collectFrom(root){
-          var nodes = root.querySelectorAll('p,h2,h3,ul,ol,figure,img');
-          nodes.forEach(function(n){
-            var tag = n.tagName;
-
-            if (tag === 'IMG' || tag === 'FIGURE') {
-              var im = n.querySelector('img') || n;
-              if (im) {
-                var src = im.getAttribute('src') || im.getAttribute('data-src') || '';
-                if (src) pushImg(src);
-              }
-              return;
-            }
-
-            var c = (n.className||'').toString();
-            if (isJunk(c)) return;
-            if (n.querySelector && n.querySelector('button,svg,path')) return;
-
-            var t = txt(n); if(!t) return;
-            var low = t.toLowerCase();
-            if (low === 'share' || low === 'save') return;
-
-            if (tag==='P') pushLine(t,'p','');
-            else if (tag==='H2') pushLine(t,'h2','is-subhead');
-            else if (tag==='H3') pushLine(t,'h3','is-subhead');
-            else if (tag==='UL' || tag==='OL') pushLine(t,'p','');
-          });
-        }
-
-        if (articleEl) {
-          collectFrom(articleEl);
-        } else {
-          // fallback: only text paragraphs, no images (to avoid picking wrong ones)
-          document.querySelectorAll('p').forEach(function(n){
-            var t = txt(n); if(t) pushLine(t,'p','');
-          });
-        }
-
-        // expose to Flutter
-        window.flutterSetLine = function(i, t){
-          var el = document.getElementById('flutter-line-'+i); if(el) el.textContent = t;
-        };
-        window.flutterHighlightLine = function(i){
-          document.querySelectorAll('.flutter-line').forEach(function(e){e.classList.remove('highlight');});
-          var tgt = document.getElementById('flutter-line-'+i);
-          if (tgt){ tgt.classList.add('highlight'); tgt.scrollIntoView({behavior:'smooth', block:'center'}); }
-        };
-
-        if (window.flutterArticle && window.flutterArticle.postMessage) {
-          window.flutterArticle.postMessage(plainLines.join('\n'));
-        }
-
-        var html = `
-          <html>
-          <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-              body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Open Sans","Helvetica Neue",sans-serif;}
-              .wrap{max-width:760px;margin:0 auto;padding:16px;}
-              img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}
-              img.inline-image{max-width:100%;height:auto;border-radius:6px;margin:10px 0;}
-              h1.flutter-line{font-size:1.7rem;line-height:1.2;margin:0 0 .5rem 0;}
-              .is-time.flutter-line{color:#666;font-size:.85rem;margin:0 0 1.2rem 0;}
-              p.flutter-line{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}
-              h2.flutter-line,h3.flutter-line{margin:1.5rem 0 .6rem 0;}
-              .flutter-line{border-left:4px solid transparent;padding-left:8px;transition:background .25s,border-left .25s;}
-              .flutter-line.highlight{background:#fff3cd;border-left-color:#f1b500;}
-            </style>
-          </head>
-          <body>
-            <div class="wrap">
-              ${imgSrc ? `<img src="${imgSrc}" class="hero" />` : ``}
-              ${htmlLines.join('')}
-            </div>
-          </body>
-          </html>`;
-        document.open(); document.write(html); document.close();
-      })();
-    """;
-
-    await _controller.runJavaScript(js);
-    await _highlightLine(0);
-  }
-
+        final text = (result?.mainText ?? '').trim();
+    final lines = text.isEmpty
+        ? <String>[]
+        : text
+            .split('\n\n')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+    final html = _buildReaderHtml(lines, result?.imageUrl);
+   await _controller.loadRequest(
+      Uri.dataFromString(
+        html,
+        mimeType: 'text/html',
+        encoding: utf8,
+      ),
   Future<void> _highlightLine(int index) async {
     await _controller.runJavaScript(
       "if(window.flutterHighlightLine) window.flutterHighlightLine($index);",
     );
+    setState(() {
+      _lines = lines;
+      _currentLine = 0;
+      _isLoading = false;
+    });
   }
 
-  Future<void> _setWebLine(int index, String text) async {
-    final safe = text
-        .replaceAll(r'\', r'\\')
-        .replaceAll("'", r"\'")
-        .replaceAll('\n', ' ');
-    await _controller.runJavaScript(
-      "if(window.flutterSetLine) window.flutterSetLine($index,'$safe');",
-    );
+    String _buildReaderHtml(List<String> lines, String? heroUrl) {
+    final buffer = StringBuffer();
+    buffer.writeln(
+        '<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">');
+    buffer.writeln(
+        '<style>body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Open Sans","Helvetica Neue",sans-serif;}');
+    buffer.writeln('.wrap{max-width:760px;margin:0 auto;padding:16px;}');
+    buffer.writeln(
+        'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}');
+    buffer.writeln('p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}');
+    buffer.writeln('</style></head><body><div class="wrap">');
+    if (heroUrl != null && heroUrl.isNotEmpty) {
+      buffer.writeln('<img src="' + heroUrl + '" class="hero" />');
+    }
+    for (final p in lines) {
+      final escaped = p
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+      buffer.writeln('<p>' + escaped + '</p>');
+    }
+    buffer.writeln('</div></body></html>');
+    return buffer.toString();
   }
 
   // --------------- Translation ---------------
@@ -597,19 +494,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
           _isTranslatedView = false;
           _currentLine = 0;
         });
-
-        // restore DOM but DON'T touch image lines
-        for (int i = 0; i < _lines.length; i++) {
-          final line = _lines[i];
-          if (line.startsWith('__IMG__|')) {
-            // leave HTML <img> as is
-            continue;
-          }
-          unawaited(_setWebLine(i, line));
-        }
-
         await _applyTtsLocale('en');
-        await _highlightLine(0);
       }
       return;
     }
@@ -647,7 +532,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
       final t = await translator.translateText(line);
       translated.add(t);
-      await _setWebLine(i, t);
     }
 
     await translator.close();
@@ -662,7 +546,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     });
 
     await _applyTtsLocale(code);
-    await _highlightLine(0);
+
   }
 
   // --------------- TTS playback ---------------
@@ -676,11 +560,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     String text = _lines[_currentLine].trim();
 
-    // image line → skip
-    if (text.startsWith('__IMG__|')) {
-      await _speakNextLine(auto: true);
-      return;
-    }
 
     if (text.isEmpty) {
       await _speakNextLine(auto: true);
@@ -692,7 +571,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
 
     setState(() => _isPlaying = true);
-    await _highlightLine(_currentLine);
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -701,9 +579,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     if (_lines.isEmpty) return;
 
     int i = _currentLine + 1;
-    while (i < _lines.length && _lines[i].trim().startsWith('__IMG__|')) {
-      i++;
-    }
 
     if (i >= _lines.length) {
       setState(() => _isPlaying = false);
@@ -716,11 +591,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   Future<void> _speakPrevLine() async {
     if (_lines.isEmpty) return;
-
     int i = _currentLine - 1;
-    while (i >= 0 && _lines[i].trim().startsWith('__IMG__|')) {
-      i--;
-    }
 
     if (i < 0) return;
 
@@ -742,11 +613,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   Future<void> _goToLast() async {
     if (_lines.isEmpty) return;
 
-    int i = _lines.length - 1;
-    while (i >= 0 && _lines[i].trim().startsWith('__IMG__|')) {
-      i--;
-    }
-    if (i < 0) return;
+    final i = _lines.length - 1;
+
 
     setState(() => _currentLine = i);
     await _speakCurrentLine();
@@ -761,7 +629,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _originalLinesCache = null;
     });
     if (_readerOn) {
-      await _injectReader();
+      await _loadReaderContent();
     } else {
       await _stopSpeaking();
       await _controller.loadRequest(Uri.parse(widget.url));
