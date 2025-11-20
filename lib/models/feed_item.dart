@@ -7,7 +7,7 @@ class FeedItem {
   final String? imageUrl;
   final DateTime? pubDate;
 
-  final bool isRead;
+  final int isRead;
   final bool isBookmarked;
 
   FeedItem({
@@ -18,7 +18,7 @@ class FeedItem {
     this.description,
     this.imageUrl,
     this.pubDate,
-    this.isRead = false,
+    this.isRead = 0,
     this.isBookmarked = false,
   });
 
@@ -30,7 +30,7 @@ class FeedItem {
     String? description,
     String? imageUrl,
     DateTime? pubDate,
-    bool? isRead,
+    int? isRead,
     bool? isBookmarked,
   }) {
     return FeedItem(
@@ -55,7 +55,7 @@ class FeedItem {
       'description': description,
       'imageUrl': imageUrl,
       'pubDateMillis': pubDate?.millisecondsSinceEpoch,
-      'isRead': isRead ? 1 : 0,
+      'isRead': isRead == 1 ? 1 : 0,
       'isBookmarked': isBookmarked ? 1 : 0,
     };
   }
@@ -73,7 +73,8 @@ class FeedItem {
           : DateTime.fromMillisecondsSinceEpoch(
               map['pubDateMillis'] as int,
             ),
-      isRead: (map['isRead'] ?? 0) == 1,
+      // ✅ FIX: keep isRead as int (0/1/2), not bool
+      isRead: (map['isRead'] as int?) ?? 0,
       isBookmarked: (map['isBookmarked'] ?? 0) == 1,
     );
   }

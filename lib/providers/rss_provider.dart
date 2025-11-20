@@ -1,171 +1,248 @@
+// lib/providers/rss_provider.dart
+
 import 'package:flutter/foundation.dart';
-import 'package:timeago/timeago.dart' as timeago;
 
 import '../models/feed_item.dart';
 import '../models/feed_source.dart';
 import '../data/feed_repository.dart';
 
-enum SortOrder { latestFirst, oldestFirst }
-enum BookmarkFilter { all, bookmarkedOnly }
-enum ReadFilter { all, readOnly, unreadOnly }
+/// Old UI uses this
+enum SortOrder {
+  latestFirst,
+  oldestFirst,
+}
+
+/// Old UI uses this
+enum BookmarkFilter {
+  all,
+  bookmarkedOnly,
+}
+
+/// We already had this, keep it
+enum ReadFilter {
+  all,
+  unreadOnly,
+  readOnly,
+}
 
 class RssProvider extends ChangeNotifier {
   final FeedRepository repo;
 
-  RssProvider({required this.repo}) {
-    timeago.setLocaleMessages('en_short', timeago.EnShortMessages());
-  }
+  RssProvider({required this.repo});
 
-  // Feeds list (BBC, Yahoo...)
-  final List<FeedSource> _sources = [...defaultSources];
-  List<FeedSource> get sources => List.unmodifiable(_sources);
-
-  // Articles
+  // ---------------------------------------------------------------------------
+  // STATE
+  // ---------------------------------------------------------------------------
   final List<FeedItem> _items = [];
-  List<FeedItem> get items => List.unmodifiable(_items);
+  final List<FeedSource> _sources = [];
 
   bool _loading = false;
-  bool get loading => _loading;
-
   String? _error;
-  String? get error => _error;
 
+  // these 3 drive the filters/sorting
   SortOrder _sortOrder = SortOrder.latestFirst;
   BookmarkFilter _bookmarkFilter = BookmarkFilter.all;
   ReadFilter _readFilter = ReadFilter.all;
+
   String _searchQuery = '';
 
-  SortOrder get sortOrder => _sortOrder;
-  BookmarkFilter get bookmarkFilter => _bookmarkFilter;
-  ReadFilter get readFilter => _readFilter;
-  String get searchQuery => _searchQuery;
+  // ---------------------------------------------------------------------------
+  // GETTERS
+  // ---------------------------------------------------------------------------
+  bool get loading => _loading;
+  String? get error => _error;
 
-  int get unreadCount => _items.where((i) => !i.isRead).length;
+  List<FeedItem> get items => List.unmodifiable(_items);
+  List<FeedSource> get sources => List.unmodifiable(_sources);
 
-  List<FeedItem> get visibleItems {
-    Iterable<FeedItem> result = _items;
+  int get unreadCount => _items.where((e) => e.isRead == 0).length;
 
-    // search
-    if (_searchQuery.trim().isNotEmpty) {
-      final q = _searchQuery.toLowerCase();
-      result = result.where((i) {
-        final inTitle = i.title.toLowerCase().contains(q);
-        final inDesc = (i.description ?? '').toLowerCase().contains(q);
-        return inTitle || inDesc;
-      });
-    }
-
-    // bookmark filter
-    if (_bookmarkFilter == BookmarkFilter.bookmarkedOnly) {
-      result = result.where((i) => i.isBookmarked);
-    }
-
-    // read/unread filter
-    if (_readFilter == ReadFilter.readOnly) {
-      result = result.where((i) => i.isRead);
-    } else if (_readFilter == ReadFilter.unreadOnly) {
-      result = result.where((i) => !i.isRead);
-    }
-
-    // sort
-    final list = result.toList();
-    list.sort((a, b) {
-      final ad = a.pubDate?.millisecondsSinceEpoch ?? 0;
-      final bd = b.pubDate?.millisecondsSinceEpoch ?? 0;
-      if (_sortOrder == SortOrder.latestFirst) {
-        return bd.compareTo(ad);
-      } else {
-        return ad.compareTo(bd);
-      }
-    });
-
-    return list;
-  }
-
+  // for bottom sheet chips
   bool get isLatestFirst => _sortOrder == SortOrder.latestFirst;
   bool get isOldestFirst => _sortOrder == SortOrder.oldestFirst;
 
   bool get showAllArticles =>
-      _bookmarkFilter == BookmarkFilter.all &&
-      _readFilter == ReadFilter.all;
-
+      _bookmarkFilter == BookmarkFilter.all && _readFilter == ReadFilter.all;
   bool get showBookmarkedOnly =>
       _bookmarkFilter == BookmarkFilter.bookmarkedOnly;
-
-  bool get showReadOnly => _readFilter == ReadFilter.readOnly;
   bool get showUnreadOnly => _readFilter == ReadFilter.unreadOnly;
+  bool get showReadOnly => _readFilter == ReadFilter.readOnly;
+List<FeedItem> get allItems => List.unmodifiable(_items);
 
+  String get searchQuery => _searchQuery;
+
+  // ---------------------------------------------------------------------------
+  // VISIBLE LIST (this is what news_page.dart shows)
+  // ---------------------------------------------------------------------------
+  List<FeedItem> get visibleItems {
+    Iterable<FeedItem> data = _items;
+
+    // 1) bookmark filter
+    if (_bookmarkFilter == BookmarkFilter.bookmarkedOnly) {
+      data = data.where((e) => e.isBookmarked);
+    }
+
+    // 2) read filter
+    switch (_readFilter) {
+      case ReadFilter.all:
+        break;
+      case ReadFilter.unreadOnly:
+        data = data.where((e) => !(e.isRead==1));
+        break;
+      case ReadFilter.readOnly:
+        data = data.where((e) => (e.isRead==1));
+        break;
+    }
+
+    // 3) sorting
+    final list = data.toList()
+      ..sort((a, b) {
+        final ad = a.pubDate?.millisecondsSinceEpoch ?? 0;
+        final bd = b.pubDate?.millisecondsSinceEpoch ?? 0;
+        final cmp = ad.compareTo(bd);
+        return _sortOrder == SortOrder.latestFirst ? -cmp : cmp;
+      });
+
+    return list;
+  }
+
+  // for NewsSearchPage – apply text search on top of _items
+  List<FeedItem> get searchResults {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    return _items.where((item) {
+      return item.title.toLowerCase().contains(q) ||
+          (item.description ?? '').toLowerCase().contains(q) ||
+          item.sourceTitle.toLowerCase().contains(q);
+    }).toList()
+      ..sort((a, b) {
+        final ad = a.pubDate?.millisecondsSinceEpoch ?? 0;
+        final bd = b.pubDate?.millisecondsSinceEpoch ?? 0;
+        return bd.compareTo(ad);
+      });
+  }
+
+  // ---------------------------------------------------------------------------
+  // LIFECYCLE / LOADING
+  // ---------------------------------------------------------------------------
   Future<void> loadInitial() async {
     _loading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final merged = await repo.loadAll(_sources);
+      final sources = await repo.getAllSources();
+
+      // FETCH + UPSERT newest items into DB
+      await repo.loadAll(sources);
+
+      // Trim per-feed to limit (bookmarks never deleted)
+      await repo.cleanupOldArticlesForSources(sources);
+
+      // Read trimmed list from DB (no extra network)
+      final merged = await repo.readAllFromDb();
+
+      _sources
+        ..clear()
+        ..addAll(sources);
       _items
         ..clear()
         ..addAll(merged);
     } catch (e) {
-      _error = e.toString();
+      _error = '$e';
+    } finally {
+      _loading = false;
+      notifyListeners();
     }
-
-    _loading = false;
-    notifyListeners();
   }
 
-  Future<void> refresh() => loadInitial();
-
-  void addSource(FeedSource source) {
-    _sources.add(source);
+  Future<void> refresh() async {
+    if (_loading) return;
+    _loading = true;
+    _error = null;
     notifyListeners();
-    loadInitial();
+
+    try {
+      final sources = await repo.getAllSources();
+
+      // FETCH + UPSERT newest items into DB
+      await repo.loadAll(sources);
+
+      // Trim per-feed to limit (bookmarks never deleted)
+      await repo.cleanupOldArticlesForSources(sources);
+
+      // Read trimmed list from DB (no extra network)
+      final merged = await repo.readAllFromDb();
+
+      _sources
+        ..clear()
+        ..addAll(sources);
+      _items
+        ..clear()
+        ..addAll(merged);
+    } catch (e) {
+      _error = '$e';
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
   }
 
-  void deleteSource(FeedSource source) {
-    _sources.removeWhere((s) => s.url == source.url);
-    notifyListeners();
-    loadInitial();
+  // ---------------------------------------------------------------------------
+  // FEED MGMT
+  // ---------------------------------------------------------------------------
+  Future<void> addSource(FeedSource source) async {
+    await repo.addSource(source);
+    await refresh();
   }
 
-  void markRead(FeedItem item) {
+  Future<void> deleteSource(FeedSource source) async {
+    if (source.id != null) {
+      await repo.deleteSource(source.id!);
+    }
+    await refresh();
+  }
+
+  // ---------------------------------------------------------------------------
+  // ARTICLE ACTIONS
+  // ---------------------------------------------------------------------------
+  Future<void> toggleBookmark(FeedItem item) async {
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx == -1) return;
 
-    _items[idx] = _items[idx].copyWith(isRead: true);
-    repo.setRead(item.id, true);
-
+    final updated = item.copyWith(isBookmarked: !item.isBookmarked);
+    _items[idx] = updated;
     notifyListeners();
+
+    await repo.setBookmark(item.id, updated.isBookmarked);
   }
 
-  void toggleBookmark(FeedItem item) {
+  Future<void> markRead(FeedItem item, {int read = 1}) async {
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx == -1) return;
 
-    final nowBookmarked = !_items[idx].isBookmarked;
-    _items[idx] =
-        _items[idx].copyWith(isBookmarked: nowBookmarked);
-
-    repo.setBookmark(item.id, nowBookmarked);
+    final updated = item.copyWith(isRead: read);
+    _items[idx] = updated;
     notifyListeners();
+
+    await repo.setRead(item.id, read);
   }
 
-  String niceTimeAgo(DateTime? when) {
-    if (when == null) return '';
-    return timeago.format(when, locale: 'en');
-  }
-
+  // ---------------------------------------------------------------------------
+  // FILTERS / SORTING (the ones news_page.dart calls)
+  // ---------------------------------------------------------------------------
   void setSortOrder(SortOrder order) {
     _sortOrder = order;
     notifyListeners();
   }
 
-  void setBookmarkFilter(BookmarkFilter f) {
-    _bookmarkFilter = f;
+  void setBookmarkFilter(BookmarkFilter filter) {
+    _bookmarkFilter = filter;
     notifyListeners();
   }
 
-  void setReadFilter(ReadFilter f) {
-    _readFilter = f;
+  void setReadFilter(ReadFilter filter) {
+    _readFilter = filter;
     notifyListeners();
   }
 
@@ -173,4 +250,40 @@ class RssProvider extends ChangeNotifier {
     _searchQuery = q;
     notifyListeners();
   }
+
+  // ---------------------------------------------------------------------------
+  // UTIL
+  // ---------------------------------------------------------------------------
+  String niceTimeAgo(DateTime? dt) {
+    if (dt == null) return '';
+    final diff = DateTime.now().difference(dt);
+
+    if (diff.inSeconds < 60) {
+      return '${diff.inSeconds}s ago';
+    } else if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    } else {
+      return '${diff.inDays}d ago';
+    }
+  }
+
+  Future<void> hideReadNow() async {
+  if (_loading) return;
+  _loading = true;
+  notifyListeners();
+
+  try {
+    await repo.hideAllRead();                 // set isRead = 2
+    final merged = await repo.readAllFromDb();// reload from DB (2 is excluded)
+    _items..clear()..addAll(merged);
+  } catch (e) {
+    _error = '$e';
+  } finally {
+    _loading = false;
+    notifyListeners();
+  }
+}
+
 }

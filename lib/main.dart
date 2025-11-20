@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,95 +7,107 @@ import 'providers/rss_provider.dart';
 
 import 'services/database_service.dart';
 import 'services/article_dao.dart';
+import 'services/feed_source_dao.dart';
 
-import '../data/http_feed_fetcher.dart';
-import '../data/rss_atom_parser.dart';
-import '../services/rss_service.dart';
+import 'data/http_feed_fetcher.dart';
+import 'data/rss_atom_parser.dart';
+import 'services/rss_service.dart';
 
-import '../data/feed_repository.dart';
+import 'data/feed_repository.dart';
 import 'screens/root_shell.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 1. settings (persistent user prefs)
-  final settingsProvider = SettingsProvider();
-  await settingsProvider.loadFromStorage();
-
-  // 2. data layer
-  final dbService = DatabaseService();
-  final articleDao = ArticleDao(dbService);
-
-  final rssService = RssService(
-    fetcher: HttpFeedFetcher(),
-    parser: RssAtomParser(),
-  );
-
-  final repo = FeedRepository(
-    rssService: rssService,
-    articleDao: articleDao,
-  );
-
-  runApp(MyApp(
-    settingsProvider: settingsProvider,
-    repo: repo,
-  ));
+  runApp(const AppBootstrap());
 }
 
-class MyApp extends StatelessWidget {
-  final SettingsProvider settingsProvider;
-  final FeedRepository repo;
-
-  const MyApp({
-    super.key,
-    required this.settingsProvider,
-    required this.repo,
-  });
+class AppBootstrap extends StatelessWidget {
+  const AppBootstrap({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // already created above, so .value is correct
-        ChangeNotifierProvider<SettingsProvider>.value(
-          value: settingsProvider,
+        // SETTINGS
+        ChangeNotifierProvider(
+          // ⬇⬇⬇ use loadFromStorage, not load
+          create: (_) => SettingsProvider()..loadFromStorage(),
         ),
 
-        // articles / read state / etc.
-        ChangeNotifierProvider(
-          create: (_) {
+        // DB SERVICE
+        Provider<DatabaseService>(
+          create: (_) => DatabaseService(),
+        ),
+
+        // ARTICLE DAO
+        ProxyProvider<DatabaseService, ArticleDao>(
+          update: (_, db, __) => ArticleDao(db),
+        ),
+
+        // FEED SOURCE DAO (BBC, Yahoo, etc. stored in SQLite)
+        ProxyProvider<DatabaseService, FeedSourceDao>(
+          update: (_, db, __) => FeedSourceDao(db),
+        ),
+
+        // LOW LEVEL RSS
+        Provider<RssService>(
+          create: (_) => RssService(
+            fetcher: HttpFeedFetcher(),
+            parser: RssAtomParser(),
+          ),
+        ),
+
+        // REPOSITORY = RSS + DB
+        ProxyProvider3<RssService, ArticleDao, FeedSourceDao, FeedRepository>(
+          update: (_, rssService, articleDao, feedSourceDao, __) =>
+              FeedRepository(
+            rssService: rssService,
+            articleDao: articleDao,
+            feedSourceDao: feedSourceDao,
+          ),
+        ),
+
+        // UI PROVIDER
+        ChangeNotifierProvider<RssProvider>(
+          create: (ctx) {
+            final repo = ctx.read<FeedRepository>();
             final p = RssProvider(repo: repo);
             p.loadInitial();
             return p;
           },
         ),
       ],
-      child: Consumer<SettingsProvider>(
-        builder: (context, settings, _) {
-          final dark = settings.darkTheme;
+      child: const MyApp(),
+    );
+  }
+}
 
-          return MaterialApp(
-            debugShowCheckedModeBanner: false,
-            title: 'Flutter RSS Reader',
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
-            themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<SettingsProvider>(
+      builder: (context, settings, _) {
+        final isDark = settings.darkTheme;
 
-            theme: ThemeData(
-              brightness: Brightness.light,
-              useMaterial3: true,
-              colorSchemeSeed: Colors.red,
-            ),
-
-            darkTheme: ThemeData(
-              brightness: Brightness.dark,
-              useMaterial3: true,
-              colorSchemeSeed: Colors.red,
-            ),
-
-            home: const RootShell(),
-          );
-        },
-      ),
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Flutter RSS Reader',
+          themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: Colors.blue,
+            brightness: Brightness.light,
+          ),
+          darkTheme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: Colors.blue,
+            brightness: Brightness.dark,
+          ),
+          home: const RootShell(),
+        );
+      },
     );
   }
 }

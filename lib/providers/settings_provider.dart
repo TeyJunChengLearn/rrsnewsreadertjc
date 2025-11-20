@@ -35,8 +35,13 @@ class SettingsProvider extends ChangeNotifier {
     _articleLimitPerFeed =
         prefs.getInt(_kArticleLimitPerFeed) ?? _articleLimitPerFeed;
 
+    // 🔴 add this line so translate language is restored on startup
+    _translateLangCode =
+        prefs.getString(_kTranslateLangKey) ?? _translateLangCode;
+
     notifyListeners();
-  }
+    }
+
 
   Future<void> toggleDarkTheme(bool val) async {
     _darkTheme = val;
@@ -66,10 +71,34 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt(_kUpdateIntervalMinutes, _updateIntervalMinutes);
   }
 
-  Future<void> setArticleLimitPerFeed(int limit) async {
-    _articleLimitPerFeed = limit;
-    notifyListeners();
+Future<void> setArticleLimitPerFeed(int value) async {
+  // clamp to 10–10 000
+  value = value.clamp(10, 10000);
+  _articleLimitPerFeed = value;
+
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setInt(_kArticleLimitPerFeed, _articleLimitPerFeed);
+  notifyListeners();
+}
+  static const _kTranslateLangKey = 'translate_lang_code';
+  // Codes: 'off', 'en', 'ms', 'zh-CN', 'zh-TW', 'ja', 'ko', 'id', 'th', 'vi',
+  // 'ar', 'fr', 'es', 'de', 'pt', 'it', 'ru', 'hi'
+
+  String _translateLangCode = 'off';
+  String get translateLangCode => _translateLangCode;
+
+  Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kArticleLimitPerFeed, _articleLimitPerFeed);
+    _translateLangCode = prefs.getString(_kTranslateLangKey) ?? 'off';
+    notifyListeners();
   }
+
+  Future<void> setTranslateLangCode(String code) async {
+    _translateLangCode = code;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kTranslateLangKey, code);
+    notifyListeners();
+  }
+
+  bool get isTranslateEnabled => _translateLangCode != 'off';
 }

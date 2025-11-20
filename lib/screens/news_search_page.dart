@@ -25,7 +25,7 @@ class _NewsSearchPageState extends State<NewsSearchPage> {
   @override
   Widget build(BuildContext context) {
     final rss = context.watch<RssProvider>();
-    final results = rss.visibleItems;
+    final results = rss.searchResults;
 
     return Scaffold(
       appBar: AppBar(
@@ -76,8 +76,8 @@ class _SearchRow extends StatelessWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          fontWeight: item.isRead ? FontWeight.w400 : FontWeight.w600,
-          color: item.isRead ? Colors.grey.shade600 : null,
+          fontWeight: item.isRead==1 ? FontWeight.w400 : FontWeight.w600,
+          color: item.isRead==1 ? Colors.grey.shade600 : null,
         ),
       ),
       subtitle: Text(
@@ -86,13 +86,18 @@ class _SearchRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       onTap: () {
-        rss.markRead(item);
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ArticleWebViewPage(item: item),
-          ),
-        );
-      },
+  // optional: mark read
+  rss.markRead(item);
+  if (item.link == null || item.link!.isEmpty) return;
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => ArticleWebviewPage(
+        url: item.link!,
+      ),
+    ),
+  );
+},
+
     );
   }
 }
