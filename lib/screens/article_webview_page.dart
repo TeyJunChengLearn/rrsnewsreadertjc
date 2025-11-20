@@ -238,13 +238,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
 
+
+ String? _webHighlightText;
   @override
   void initState() {
     super.initState();
     _initWebView();
 
     _tts.setSharedInstance(true);
-    _tts.setSpeechRate(0.8);
+    _tts.setSpeechRate(0.5);
     _tts.setPitch(1.0);
 
     _tts.setCompletionHandler(() async {
@@ -359,19 +361,47 @@ Future<void> _applyTtsLocale(String bcpCode) async {
   /// Highlight the current line in our reader HTML.
   /// Only in Reader mode AND when highlightText setting is ON.
   Future<void> _highlightLine(int index) async {
-    if (!_readerOn || !mounted) return;
+    if (!mounted) return;
 
     final settings = context.read<SettingsProvider>();
     if (!settings.highlightText) return;
 
-    try {
-      await _controller.runJavaScript(
-        'window.flutterHighlightLine && window.flutterHighlightLine($index);',
-      );
-    } catch (_) {
-      // ignore JS errors
+    if (_readerOn) {
+      // Clear any lingering overlay highlight when we switch to reader mode
+      if (_webHighlightText != null) {
+        setState(() => _webHighlightText = null);
+      }
+
+      try {
+        await _controller.runJavaScript(
+          'window.flutterHighlightLine && window.flutterHighlightLine($index);',
+        );
+      } catch (_) {
+        // ignore JS errors
+      }
+    } else {
+      if (index < 0 || index >= _lines.length) return;
+      final text = _lines[index].trim();
+      if (text.isEmpty) return;
+      setState(() => _webHighlightText = text);
     }
   }
+  Future<void> _reloadReaderHtml({bool showLoading = false}) async {
+    if (!_readerOn) return;
+    if (showLoading && mounted) {
+      setState(() => _isLoading = true);
+    }
+
+    final html = _buildReaderHtml(_lines, _heroImageUrl);
+    await _controller.loadRequest(
+      Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
+    );
+
+    if (showLoading && mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
+
 
   String _buildReaderHtml(List<String> lines, String? heroUrl) {
     final buffer = StringBuffer();
@@ -533,7 +563,10 @@ Future<void> _toggleTranslateToSetting() async {
           ..addAll(_originalLinesCache!);
         _isTranslatedView = false;
         _currentLine = 0;
+        _webHighlightText = null;
+
       });
+      await _reloadReaderHtml(showLoading: true);
       await _applyTtsLocale('en');
     }
     return;
@@ -584,8 +617,9 @@ Future<void> _toggleTranslateToSetting() async {
     _isTranslatedView = true;
     _isTranslating = false;
     _currentLine = 0;
+    _webHighlightText = null;
   });
-
+  await _reloadReaderHtml(showLoading: true);
   await _applyTtsLocale(code);
 }
 
@@ -625,8 +659,9 @@ Future<void> _toggleTranslateToSetting() async {
 
     // 👇 Build final lines list: optional header + article content
     final combined = <String>[];
-    if (widget.title != null && widget.title!.trim().isNotEmpty) {
-      combined.add(widget.title!.trim());
+    final header = (widget.title ?? '').trim();
+    if (header.isNotEmpty) {
+      combined.add(header);
     }
     combined.addAll(rawLines);
 
@@ -662,7 +697,10 @@ Future<void> _toggleTranslateToSetting() async {
     // Highlight current line in reader mode (if setting ON)
     await _highlightLine(_currentLine);
 
-    setState(() => _isPlaying = true);
+    setState(() {
+        _isPlaying = false;
+        _webHighlightText = null;
+      });
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -727,6 +765,7 @@ Future<void> _toggleTranslateToSetting() async {
       _readerOn = !_readerOn;
       _isTranslatedView = false;
       _originalLinesCache = null;
+      _webHighlightText = null;
     });
 
     if (_readerOn) {
@@ -736,6 +775,7 @@ Future<void> _toggleTranslateToSetting() async {
       // Go back to full website, but KEEP _lines so TTS still works
       await _controller.loadRequest(Uri.parse(widget.url));
     }
+    
   }
 
   @override
@@ -793,6 +833,42 @@ Future<void> _toggleTranslateToSetting() async {
           if (_isLoading)
             const LinearProgressIndicator(
               minHeight: 2,
+            ),
+             if (!_readerOn &&
+              settings.highlightText &&
+              (_webHighlightText?.isNotEmpty ?? false))
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: SafeArea(
+                child: IgnorePointer(
+                  ignoring: true,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.yellow.shade100.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 6,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Text(
+                        _webHighlightText ?? '',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
         ],
       ),
