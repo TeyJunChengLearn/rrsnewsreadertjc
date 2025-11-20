@@ -1,6 +1,7 @@
 // lib/screens/article_webview_page.dart
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -10,6 +11,7 @@ import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 
 import '../providers/settings_provider.dart';
 import '../services/readability_service.dart';
+
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
 String bcpFromTranslateLanguage(TranslateLanguage lang) {
   switch (lang) {
@@ -18,7 +20,7 @@ String bcpFromTranslateLanguage(TranslateLanguage lang) {
     case TranslateLanguage.malay:
       return 'ms';
     case TranslateLanguage.chinese:
-      return 'zh';
+      return 'zh-CN';
     case TranslateLanguage.japanese:
       return 'ja';
     case TranslateLanguage.korean:
@@ -46,11 +48,12 @@ String bcpFromTranslateLanguage(TranslateLanguage lang) {
     case TranslateLanguage.hindi:
       return 'hi';
     default:
+      // Fallback for languages we don't map explicitly (e.g. afrikaans)
       return 'en';
   }
 }
 
-/// TTS locale preference list for a language code saved in settings
+/// Choose concrete TTS locale from short language code
 String _ttsLocaleForCode(String code) {
   switch (code) {
     case 'en':
@@ -80,7 +83,7 @@ String _ttsLocaleForCode(String code) {
     case 'de':
       return 'de-DE';
     case 'pt':
-      return 'pt-BR';
+      return 'pt-PT';
     case 'it':
       return 'it-IT';
     case 'ru':
@@ -92,14 +95,10 @@ String _ttsLocaleForCode(String code) {
   }
 }
 
-// ====== added: proper Chinese number converter ======
-String _toChineseNumber(String numStr) {
-  final n = int.tryParse(numStr);
-  if (n == null) return numStr;
-  return _intToChinese(n);
-}
+// ---------- Chinese number helper (for TTS) ----------
 
-String _intToChinese(int n) {
+String _toChineseNumber(String rawDigits) {
+  int n = int.tryParse(rawDigits) ?? 0;
   if (n == 0) return '零';
 
   const smallUnits = ['', '十', '百', '千'];
@@ -127,35 +126,90 @@ String _intToChinese(int n) {
     return res;
   }
 
-  String out = '';
-  int bigPos = 0;
+  String result = '';
+  int unitPos = 0;
   while (n > 0) {
-    final sec = n % 10000;
-    if (sec != 0) {
-      String part = sectionToCn(sec);
-      if (bigPos > 0) {
-        part += bigUnits[bigPos];
-      }
-      out = part + out;
+    int section = n % 10000;
+    if (section != 0) {
+      String sectionStr = sectionToCn(section) + bigUnits[unitPos];
+      result = sectionStr + result;
     } else {
-      if (!out.startsWith('零') && out.isNotEmpty) {
-        out = '零$out';
+      if (!result.startsWith('零')) {
+        result = '零$result';
       }
     }
-    bigPos++;
+    unitPos++;
     n ~/= 10000;
   }
 
-  if (out.startsWith('一十')) {
-    out = out.substring(1);
-  }
-  return out;
+  result = result.replaceAll(RegExp(r'零+$'), '');
+  result = result.replaceAll('零零', '零');
+  return result;
 }
-// ====== end added ======
+
+/// Normalize numbers, date/time etc for TTS in target language
+String _normalizeForTts(String text, String langCode) {
+  String s = text;
+
+  if (langCode.startsWith('zh')) {
+    // 2025-10-30 -> 2025年10月30日
+    s = s.replaceAllMapped(
+      RegExp(r'(\d{4})-(\d{1,2})-(\d{1,2})'),
+      (m) =>
+          '${_toChineseNumber(m[1]!)}年${_toChineseNumber(m[2]!)}月${_toChineseNumber(m[3]!)}日',
+    );
+    // 14:05 -> 14点05分
+    s = s.replaceAllMapped(
+      RegExp(r'(\d{1,2}):(\d{2})'),
+      (m) => '${_toChineseNumber(m[1]!)}点${_toChineseNumber(m[2]!)}分',
+    );
+    // 12% -> 百分之十二
+    s = s.replaceAllMapped(
+      RegExp(r'(\d+)%'),
+      (m) => '百分之${_toChineseNumber(m[1]!)}',
+    );
+    // units & currency
+    s = s.replaceAll('km/h', '公里每小时').replaceAll(RegExp(r'\bkm\b'), '公里');
+    s = s.replaceAll('USD', '美元').replaceAll(RegExp(r'\$'), '美元');
+    // generic numbers
+    s = s.replaceAllMapped(
+      RegExp(r'\d+'),
+      (m) => _toChineseNumber(m[0]!),
+    );
+  } else if (langCode == 'ja') {
+    s = s.replaceAllMapped(
+      RegExp(r'(\d{4})-(\d{1,2})-(\d{1,2})'),
+      (m) => '${m[1]}年${m[2]}月${m[3]}日',
+    );
+    s = s.replaceAllMapped(
+      RegExp(r'(\d{1,2}):(\d{2})'),
+      (m) => '${m[1]}時${m[2]}分',
+    );
+    s = s.replaceAll('km/h', 'キロ毎時').replaceAll(RegExp(r'\bkm\b'), 'キロ');
+    s = s.replaceAll('USD', '米ドル').replaceAll(RegExp(r'\$'), 'ドル');
+  } else if (langCode == 'ko') {
+    s = s.replaceAllMapped(
+      RegExp(r'(\d{1,2}):(\d{2})'),
+      (m) => '${m[1]}시 ${m[2]}분',
+    );
+    s = s.replaceAll('km/h', '시속 킬로미터').replaceAll(RegExp(r'\bkm\b'), '킬로미터');
+    s = s.replaceAll('USD', '미 달러').replaceAll(RegExp(r'\$'), '달러');
+  }
+
+  return s;
+}
+
+// =================== Widget ===================
 
 class ArticleWebviewPage extends StatefulWidget {
-  final String url; // only URL, no title in ctor
-  const ArticleWebviewPage({super.key, required this.url});
+  final String url;
+  final String? title; // optional RSS/article title to include in reading
+
+  const ArticleWebviewPage({
+    super.key,
+    required this.url,
+    this.title,
+  });
 
   @override
   State<ArticleWebviewPage> createState() => _ArticleWebviewPageState();
@@ -169,9 +223,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _readerOn = false;
 
   // Reader content (one line per highlightable/speakable chunk)
-  List<String> _lines = [];
+  final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
   int _currentLine = 0;
+
+  // Hero image from Readability result (used in reader HTML)
+  String? _heroImageUrl;
 
   // TTS state
   bool _isPlaying = false;
@@ -184,105 +241,71 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   @override
   void initState() {
     super.initState();
-    _initTts();
     _initWebView();
-  }
 
-  // ---------------- TTS setup + helpers ----------------
-
-  Future<void> _initTts() async {
-    await _tts.setVolume(1.0);
-    await _tts.setSpeechRate(0.5);
-    await _tts.setPitch(1.0);
-    await _tts.awaitSpeakCompletion(true);
-    try {
-      await _tts.setEngine('com.google.android.tts');
-    } catch (_) {}
+    _tts.setSharedInstance(true);
+    _tts.setSpeechRate(0.8);
+    _tts.setPitch(1.0);
 
     _tts.setCompletionHandler(() async {
       if (!_isPlaying) return;
       await _speakNextLine(auto: true);
     });
     _tts.setCancelHandler(() {
-      if (mounted) setState(() => _isPlaying = false);
+      if (mounted) {
+        setState(() => _isPlaying = false);
+      }
+    });
+
+    // Preload Readability text in background so TTS/translate work in both modes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureLinesLoaded();
     });
   }
 
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
-  Future<void> _applyTtsLocale(String bcpCode) async {
-    await _tts.setLanguage(_ttsLocaleForCode(bcpCode));
-    try {
-      final List<dynamic>? voices = await _tts.getVoices;
-      if (voices == null) return;
+  /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
+Future<void> _applyTtsLocale(String bcpCode) async {
+  await _tts.setLanguage(_ttsLocaleForCode(bcpCode));
+  try {
+    final List<dynamic>? voices = await _tts.getVoices;
+    if (voices == null || voices.isEmpty) return;
 
-      Map<String, dynamic>? chosen;
-      final lc = bcpCode.toLowerCase();
-      final base = lc.split('-').first;
+    final lc = bcpCode.toLowerCase();
+    final base = lc.split('-').first;
 
-      final parsed = voices
-          .whereType<Map>()
-          .map((m) => m.map((k, v) => MapEntry(k.toString(), v)))
-          .toList();
+    // Normalize voices into a list of Map<String, dynamic>
+    final List<Map<String, dynamic>> parsed = voices
+        .whereType<Map>()
+        .map<Map<String, dynamic>>((m) {
+          final map = <String, dynamic>{};
+          (m as Map).forEach((key, value) {
+            map[key.toString()] = value;
+          });
+          return map;
+        })
+        .toList();
 
-      chosen = parsed.firstWhere(
-        (v) => (v['locale'] ?? '').toString().toLowerCase() == lc,
-        orElse: () => parsed.firstWhere(
-          (v) => (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
-          orElse: () => <String, dynamic>{},
-        ),
-      );
+    if (parsed.isEmpty) return;
 
-      if (chosen != null && chosen.isNotEmpty) {
-        await _tts.setVoice({
-          'name': chosen['name'],
-          'locale': chosen['locale'],
-        });
-      }
-    } catch (_) {/* ignore */}
+    Map<String, dynamic> chosen = parsed.firstWhere(
+      (v) => (v['locale'] ?? '').toString().toLowerCase() == lc,
+      orElse: () => parsed.firstWhere(
+        (v) => (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
+        orElse: () => parsed.first,
+      ),
+    );
+
+    if (chosen.isEmpty) return;
+
+    await _tts.setVoice({
+      'name': chosen['name'],
+      'locale': chosen['locale'],
+    });
+  } catch (_) {
+    // ignore if voices are not supported or any error occurs
   }
-
-  /// Normalize digits/symbols so TTS doesn’t switch to English mid-sentence
-  String _normalizeForTts(String s, String langCode) {
-    if (langCode.startsWith('zh')) {
-      // dates 2025-10-30 -> 2025年10月30日  (each part converted)
-      s = s.replaceAllMapped(
-        RegExp(r'(\d{4})-(\d{1,2})-(\d{1,2})'),
-        (m) =>
-            '${_toChineseNumber(m[1]!)}年${_toChineseNumber(m[2]!)}月${_toChineseNumber(m[3]!)}日',
-      );
-      // time 14:05 -> 14点05分
-      s = s.replaceAllMapped(
-        RegExp(r'(\d{1,2}):(\d{2})'),
-        (m) => '${_toChineseNumber(m[1]!)}点${_toChineseNumber(m[2]!)}分',
-      );
-      // percent 12% -> 百分之十二
-      s = s.replaceAllMapped(
-        RegExp(r'(\d+)%'),
-        (m) => '百分之${_toChineseNumber(m[1]!)}',
-      );
-      // units & currency
-      s = s.replaceAll('km/h', '公里每小时').replaceAll(RegExp(r'\bkm\b'), '公里');
-      s = s.replaceAll('USD', '美元').replaceAll(RegExp(r'\$'), '美元');
-      // >>> main change: whole numbers -> Chinese
-      s = s.replaceAllMapped(
-        RegExp(r'\d+'),
-        (m) => _toChineseNumber(m[0]!),
-      );
-    } else if (langCode == 'ja') {
-      s = s.replaceAllMapped(RegExp(r'(\d{4})-(\d{1,2})-(\d{1,2})'),
-          (m) => '${m[1]}年${m[2]}月${m[3]}日');
-      s = s.replaceAllMapped(
-          RegExp(r'(\d{1,2}):(\d{2})'), (m) => '${m[1]}時${m[2]}分');
-      s = s.replaceAll('km/h', 'キロ毎時').replaceAll(RegExp(r'\bkm\b'), 'キロ');
-      s = s.replaceAll('USD', '米ドル').replaceAll(RegExp(r'\$'), 'ドル');
-    } else if (langCode == 'ko') {
-      s = s.replaceAllMapped(
-          RegExp(r'(\d{1,2}):(\d{2})'), (m) => '${m[1]}시 ${m[2]}분');
-      s = s.replaceAll('km/h', '시속 킬로미터').replaceAll(RegExp(r'\bkm\b'), '킬로미터');
-      s = s.replaceAll('USD', '미 달러').replaceAll(RegExp(r'\$'), '달러');
-    }
-    return s;
-  }
+}
 
   // ---------------- WebView + Reader ----------------
 
@@ -291,99 +314,113 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) => setState(() => _isLoading = true),
-          onPageFinished: (_) => setState(() => _isLoading = false),
+          onPageStarted: (_) {
+            setState(() => _isLoading = true);
+          },
+          onPageFinished: (_) {
+            setState(() => _isLoading = false);
+          },
         ),
       );
-    if (_readerOn) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _loadReaderContent();
-      });
-    } else {
-      _controller.loadRequest(Uri.parse(widget.url));
-    }
-  }      
+
+    // Default: show full website
+    _controller.loadRequest(Uri.parse(widget.url));
+  }
+
   Future<void> _loadReaderContent() async {
     setState(() {
       _isLoading = true;
       _isTranslatedView = false;
       _originalLinesCache = null;
     });
-          final readability = context.read<Readability4JExtended>();
-    ArticleReadabilityResult? result;
-    try {
-      result = await readability.extractMainContent(widget.url);
-    } catch (_) {
-      result = null;
-    }
-    if (!mounted) return;
-        if (result == null || (result.mainText?.trim().isEmpty ?? true)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to load reader view, showing website.')),
-      );
-      setState(() {
+
+    await _ensureLinesLoaded();
+    if (_lines.isEmpty) {
+      if (mounted) {
         _readerOn = false;
-        _lines = [];
-        _currentLine = 0;
         _isLoading = false;
-      });
+      }
       await _controller.loadRequest(Uri.parse(widget.url));
       return;
     }
-  
 
-        final text = (result?.mainText ?? '').trim();
-    final lines = text.isEmpty
-        ? <String>[]
-        : text
-            .split('\n\n')
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toList();
-    final html = _buildReaderHtml(lines, result?.imageUrl);
-   await _controller.loadRequest(
-      Uri.dataFromString(
-        html,
-        mimeType: 'text/html',
-        encoding: utf8,
-      ),
-  Future<void> _highlightLine(int index) async {
-    await _controller.runJavaScript(
-      "if(window.flutterHighlightLine) window.flutterHighlightLine($index);",
+    final html = _buildReaderHtml(_lines, _heroImageUrl);
+    await _controller.loadRequest(
+      Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
     );
-    setState(() {
-      _lines = lines;
-      _currentLine = 0;
-      _isLoading = false;
-    });
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
-    String _buildReaderHtml(List<String> lines, String? heroUrl) {
-    final buffer = StringBuffer();
-    buffer.writeln(
-        '<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">');
-    buffer.writeln(
-        '<style>body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Open Sans","Helvetica Neue",sans-serif;}');
-    buffer.writeln('.wrap{max-width:760px;margin:0 auto;padding:16px;}');
-    buffer.writeln(
-        'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}');
-    buffer.writeln('p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}');
-    buffer.writeln('</style></head><body><div class="wrap">');
-    if (heroUrl != null && heroUrl.isNotEmpty) {
-      buffer.writeln('<img src="' + heroUrl + '" class="hero" />');
+  /// Highlight the current line in our reader HTML.
+  /// Only in Reader mode AND when highlightText setting is ON.
+  Future<void> _highlightLine(int index) async {
+    if (!_readerOn || !mounted) return;
+
+    final settings = context.read<SettingsProvider>();
+    if (!settings.highlightText) return;
+
+    try {
+      await _controller.runJavaScript(
+        'window.flutterHighlightLine && window.flutterHighlightLine($index);',
+      );
+    } catch (_) {
+      // ignore JS errors
     }
-    for (final p in lines) {
+  }
+
+  String _buildReaderHtml(List<String> lines, String? heroUrl) {
+    final buffer = StringBuffer();
+    buffer.writeln('<html><head>'
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">');
+    buffer.writeln('<style>'
+        'body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,system-ui,Roboto,"Segoe UI",sans-serif;}'
+        '.wrap{max-width:760px;margin:0 auto;padding:16px;}'
+        'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}'
+        'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}'
+        'p.hl{background-color:rgba(255,235,59,0.4);}'
+        // treat first line (index 0) as header
+        'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:1.2rem;}'
+        '</style>');
+    buffer.writeln('<script>'
+        'window.flutterHighlightLine=function(index){'
+        'var paras=document.querySelectorAll("p[data-idx]");'
+        'for(var i=0;i<paras.length;i++){'
+        'var el=paras[i];'
+        'var idx=parseInt(el.getAttribute("data-idx")||"-1");'
+        'if(idx===index){'
+        'el.classList.add("hl");'
+        'el.scrollIntoView({behavior:"smooth",block:"center"});'
+        '}else{'
+        'el.classList.remove("hl");'
+        '}'
+        '}'
+        '};'
+        '</script>');
+    buffer.writeln('</head><body><div class="wrap">');
+
+    if (heroUrl != null && heroUrl.isNotEmpty) {
+      buffer.writeln('<img src="$heroUrl" class="hero" />');
+    }
+
+    for (var i = 0; i < lines.length; i++) {
+      final p = lines[i];
       final escaped = p
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')
           .replaceAll('>', '&gt;');
-      buffer.writeln('<p>' + escaped + '</p>');
+      buffer.writeln('<p data-idx="$i">$escaped</p>');
     }
+
     buffer.writeln('</div></body></html>');
     return buffer.toString();
   }
 
-  // --------------- Translation ---------------
+  // --------------- Translation helpers ---------------
 
   TranslateLanguage? _translateLanguageFromCode(String code) {
     switch (code) {
@@ -433,125 +470,178 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       final code =
           await id.identifyLanguage(sample.isNotEmpty ? sample : 'Hello');
       TranslateLanguage lang = TranslateLanguage.english;
-      if (code.startsWith('ms'))
+      if (code.startsWith('ms')) {
         lang = TranslateLanguage.malay;
-      else if (code.startsWith('zh'))
+      } else if (code.startsWith('zh')) {
         lang = TranslateLanguage.chinese;
-      else if (code.startsWith('ja'))
+      } else if (code.startsWith('ja')) {
         lang = TranslateLanguage.japanese;
-      else if (code.startsWith('ko'))
+      } else if (code.startsWith('ko')) {
         lang = TranslateLanguage.korean;
-      else if (code.startsWith('id'))
+      } else if (code.startsWith('id')) {
         lang = TranslateLanguage.indonesian;
-      else if (code.startsWith('th'))
+      } else if (code.startsWith('th')) {
         lang = TranslateLanguage.thai;
-      else if (code.startsWith('vi'))
+      } else if (code.startsWith('vi')) {
         lang = TranslateLanguage.vietnamese;
-      else if (code.startsWith('ar'))
+      } else if (code.startsWith('ar')) {
         lang = TranslateLanguage.arabic;
-      else if (code.startsWith('fr'))
+      } else if (code.startsWith('fr')) {
         lang = TranslateLanguage.french;
-      else if (code.startsWith('es'))
+      } else if (code.startsWith('es')) {
         lang = TranslateLanguage.spanish;
-      else if (code.startsWith('de'))
+      } else if (code.startsWith('de')) {
         lang = TranslateLanguage.german;
-      else if (code.startsWith('pt'))
+      } else if (code.startsWith('pt')) {
         lang = TranslateLanguage.portuguese;
-      else if (code.startsWith('it'))
+      } else if (code.startsWith('it')) {
         lang = TranslateLanguage.italian;
-      else if (code.startsWith('ru'))
+      } else if (code.startsWith('ru')) {
         lang = TranslateLanguage.russian;
-      else if (code.startsWith('hi')) lang = TranslateLanguage.hindi;
-
+      } else if (code.startsWith('hi')) {
+        lang = TranslateLanguage.hindi;
+      }
       _srcLangDetected = lang;
       return lang;
+    } catch (_) {
+      return TranslateLanguage.english;
     } finally {
       id.close();
     }
   }
 
-  Future<void> _toggleTranslateToSetting() async {
-    final settings = context.read<SettingsProvider>();
-    final code = settings.translateLangCode;
+Future<void> _toggleTranslateToSetting() async {
+  final settings = context.read<SettingsProvider>();
+  final code = settings.translateLangCode;
 
-    if (code == 'off') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Translation disabled in Settings.')),
-      );
-      return;
-    }
-    if (!_readerOn || _lines.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Open Reader mode first.')),
-      );
-      return;
-    }
-
-    if (_isTranslatedView) {
-      if (_originalLinesCache != null) {
-        setState(() {
-          _lines = List<String>.from(_originalLinesCache!);
-          _isTranslatedView = false;
-          _currentLine = 0;
-        });
-        await _applyTtsLocale('en');
-      }
-      return;
-    }
-
-    setState(() => _isTranslating = true);
-
-    final target = _translateLanguageFromCode(code);
-    if (target == null) {
-      setState(() => _isTranslating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Unsupported target language: $code')),
-      );
-      return;
-    }
-
-    final src = await _detectSourceLang();
-    final manager = OnDeviceTranslatorModelManager();
-    await manager.downloadModel(bcpFromTranslateLanguage(src));
-    await manager.downloadModel(bcpFromTranslateLanguage(target));
-
-    final translator =
-        OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
-
-    _originalLinesCache ??= List<String>.from(_lines);
-    final translated = <String>[];
-
-    for (int i = 0; i < _lines.length; i++) {
-      final line = _lines[i];
-
-      // image line → keep it, don’t translate, don’t overwrite DOM
-      if (line.startsWith('__IMG__|')) {
-        translated.add(line);
-        continue;
-      }
-
-      final t = await translator.translateText(line);
-      translated.add(t);
-    }
-
-    await translator.close();
-
-    if (!mounted) return;
-
-    setState(() {
-      _lines = translated;
-      _isTranslatedView = true;
-      _isTranslating = false;
-      _currentLine = 0;
-    });
-
-    await _applyTtsLocale(code);
-
+  if (code == 'off') {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Translation disabled in Settings.')),
+    );
+    return;
   }
+
+  await _ensureLinesLoaded();
+  if (_lines.isEmpty) return;
+
+  // already translated -> back to original
+  if (_isTranslatedView) {
+    if (_originalLinesCache != null) {
+      setState(() {
+        _lines
+          ..clear()
+          ..addAll(_originalLinesCache!);
+        _isTranslatedView = false;
+        _currentLine = 0;
+      });
+      await _applyTtsLocale('en');
+    }
+    return;
+  }
+
+  setState(() => _isTranslating = true);
+
+  final target = _translateLanguageFromCode(code);
+  if (target == null) {
+    setState(() => _isTranslating = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Unsupported target language: $code')),
+    );
+    return;
+  }
+
+  // Detect source language from the article text
+  final src = await _detectSourceLang();
+
+  // ✅ Let OnDeviceTranslator handle model download internally
+  final translator =
+      OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
+
+  _originalLinesCache ??= List<String>.from(_lines);
+  final translated = <String>[];
+
+  for (int i = 0; i < _lines.length; i++) {
+    final line = _lines[i];
+
+    // image marker line (we’re not using this right now, but keep logic)
+    if (line.startsWith('__IMG__|')) {
+      translated.add(line);
+      continue;
+    }
+
+    final t = await translator.translateText(line);
+    translated.add(t);
+  }
+
+  await translator.close();
+
+  if (!mounted) return;
+
+  setState(() {
+    _lines
+      ..clear()
+      ..addAll(translated);
+    _isTranslatedView = true;
+    _isTranslating = false;
+    _currentLine = 0;
+  });
+
+  await _applyTtsLocale(code);
+}
+
 
   // --------------- TTS playback ---------------
 
+  /// Ensure we have extracted article text (Readability) for TTS/translate,
+  /// no matter which mode (reader vs full web) we are in.
+  Future<void> _ensureLinesLoaded() async {
+    if (_lines.isNotEmpty) return;
+
+    final readability = context.read<Readability4JExtended>();
+    ArticleReadabilityResult? result;
+    try {
+      result = await readability.extractMainContent(widget.url);
+    } catch (_) {
+      result = null;
+    }
+
+    if (!mounted) return;
+
+    if (result == null || (result.mainText?.trim().isEmpty ?? true)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to extract article text for reading.')),
+      );
+      return;
+    }
+
+    final text = (result.mainText ?? '').trim();
+    final rawLines = text.isEmpty
+        ? <String>[]
+        : text
+            .split('\n\n')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+
+    // 👇 Build final lines list: optional header + article content
+    final combined = <String>[];
+    if (widget.title != null && widget.title!.trim().isNotEmpty) {
+      combined.add(widget.title!.trim());
+    }
+    combined.addAll(rawLines);
+
+    _heroImageUrl ??= result.imageUrl;
+
+    setState(() {
+      _lines
+        ..clear()
+        ..addAll(combined);
+      _currentLine = 0;
+    });
+  }
+
   Future<void> _speakCurrentLine() async {
+    await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
     if (_currentLine < 0 || _currentLine >= _lines.length) return;
 
@@ -559,7 +649,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     final targetCode = _isTranslatedView ? settings.translateLangCode : 'off';
 
     String text = _lines[_currentLine].trim();
-
 
     if (text.isEmpty) {
       await _speakNextLine(auto: true);
@@ -570,13 +659,20 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       text = _normalizeForTts(text, targetCode);
     }
 
+    // Highlight current line in reader mode (if setting ON)
+    await _highlightLine(_currentLine);
+
     setState(() => _isPlaying = true);
     await _tts.stop();
     await _tts.speak(text);
   }
 
   Future<void> _speakNextLine({bool auto = false}) async {
-    if (_lines.isEmpty) return;
+    await _ensureLinesLoaded();
+    if (_lines.isEmpty) {
+      setState(() => _isPlaying = false);
+      return;
+    }
 
     int i = _currentLine + 1;
 
@@ -590,9 +686,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   }
 
   Future<void> _speakPrevLine() async {
+    await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
-    int i = _currentLine - 1;
 
+    int i = _currentLine - 1;
     if (i < 0) return;
 
     setState(() => _currentLine = i);
@@ -601,21 +698,24 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   Future<void> _stopSpeaking() async {
     await _tts.stop();
-    if (mounted) setState(() => _isPlaying = false);
+    if (mounted) {
+      setState(() => _isPlaying = false);
+    }
   }
 
   Future<void> _goToFirst() async {
+    await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
+
     setState(() => _currentLine = 0);
     await _speakCurrentLine();
   }
 
   Future<void> _goToLast() async {
+    await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
 
     final i = _lines.length - 1;
-
-
     setState(() => _currentLine = i);
     await _speakCurrentLine();
   }
@@ -628,15 +728,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _isTranslatedView = false;
       _originalLinesCache = null;
     });
+
     if (_readerOn) {
       await _loadReaderContent();
     } else {
       await _stopSpeaking();
+      // Go back to full website, but KEEP _lines so TTS still works
       await _controller.loadRequest(Uri.parse(widget.url));
-      setState(() {
-        _lines = [];
-        _currentLine = 0;
-      });
     }
   }
 
@@ -658,7 +756,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () async {
             await _stopSpeaking();
-            if (mounted) Navigator.of(context).maybePop();
+            if (mounted) {
+              Navigator.of(context).maybePop();
+            }
           },
         ),
         actions: [
@@ -667,7 +767,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
             onPressed: _toggleReader,
             tooltip: _readerOn ? 'Show original page' : 'Reader mode',
           ),
-          if (_readerOn && canTranslate)
+          if (canTranslate)
             IconButton(
               icon: (_isLoading || _isTranslating)
                   ? const SizedBox(
@@ -676,55 +776,53 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : Icon(_isTranslatedView ? Icons.undo : Icons.g_translate),
-              // disable while page is loading OR translating
-              onPressed: (_isLoading || _isTranslating)
-                  ? null
-                  : _toggleTranslateToSetting,
+              onPressed:
+                  (_isLoading || _isTranslating) ? null : _toggleTranslateToSetting,
               tooltip: _isTranslatedView ? 'Show original' : 'Translate',
             ),
           if (!_readerOn)
             IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: () => _controller.reload()),
+              icon: const Icon(Icons.refresh),
+              onPressed: () => _controller.reload(),
+            ),
         ],
       ),
       body: Stack(
         children: [
           WebViewWidget(controller: _controller),
-          if (_isLoading) const LinearProgressIndicator(minHeight: 2),
+          if (_isLoading)
+            const LinearProgressIndicator(
+              minHeight: 2,
+            ),
         ],
       ),
-      bottomNavigationBar: _readerOn
-          ? SafeArea(
-              child: Container(
-                color: Theme.of(context).colorScheme.surface,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    IconButton(
-                        icon: const Icon(Icons.skip_previous),
-                        onPressed: _goToFirst),
-                    IconButton(
-                        icon: const Icon(Icons.fast_rewind),
-                        onPressed: _speakPrevLine),
-                    IconButton(
-                      icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
-                      onPressed: _isPlaying ? _stopSpeaking : _speakCurrentLine,
-                      iconSize: 32,
-                    ),
-                    IconButton(
-                        icon: const Icon(Icons.fast_forward),
-                        onPressed: _speakNextLine),
-                    IconButton(
-                        icon: const Icon(Icons.skip_next),
-                        onPressed: _goToLast),
-                  ],
-                ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          color: Theme.of(context).colorScheme.surface,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                  icon: const Icon(Icons.skip_previous),
+                  onPressed: _goToFirst),
+              IconButton(
+                  icon: const Icon(Icons.fast_rewind),
+                  onPressed: _speakPrevLine),
+              IconButton(
+                icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+                onPressed: _isPlaying ? _stopSpeaking : _speakCurrentLine,
+                iconSize: 32,
               ),
-            )
-          : null,
+              IconButton(
+                  icon: const Icon(Icons.fast_forward),
+                  onPressed: _speakNextLine),
+              IconButton(
+                  icon: const Icon(Icons.skip_next), onPressed: _goToLast),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
