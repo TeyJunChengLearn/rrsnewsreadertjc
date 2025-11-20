@@ -165,7 +165,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   final FlutterTts _tts = FlutterTts();
 
   bool _isLoading = true;
-  bool _readerOn = false;
+  bool _readerOn = true;
 
   // Reader content (one line per highlightable/speakable chunk)
   List<String> _lines = [];
@@ -751,7 +751,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     setState(() => _currentLine = i);
     await _speakCurrentLine();
   }
-
+    Future<void> _openWebsiteView() async {
+    if (!_readerOn) return;
+    await _toggleReader();
+  }
   // --------------- UI ---------------
 
   Future<void> _toggleReader() async {
@@ -794,6 +797,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
           },
         ),
         actions: [
+          if (_readerOn)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: TextButton.icon(
+                onPressed: _openWebsiteView,
+                icon: const Icon(Icons.public),
+                label: const Text('Website'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                ),
+              ),
+            ),
           IconButton(
             icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
             onPressed: _toggleReader,

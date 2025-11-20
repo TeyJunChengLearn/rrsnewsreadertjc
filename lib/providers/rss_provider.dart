@@ -148,7 +148,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
-              await _backfillArticleBodies();
+              await backfillArticleContent();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -181,7 +181,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
-         await _backfillArticleBodies();
+         await backfillArticleContent();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -229,20 +229,28 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
 
     await repo.setRead(item.id, read);
   }
-  Future<void> _backfillArticleBodies() async {
-    final updates = await repo.populateMainText(_items);
-    if (updates.isEmpty) return;
+bool _backfillInProgress = false;
+  Future<void> backfillArticleContent() async {
+    if (_backfillInProgress) return;
+    _backfillInProgress = true;
+    try {
+      final updates = await repo.populateArticleContent(_items);
+      if (updates.isEmpty) return;
 
-    for (var i = 0; i < _items.length; i++) {
-      final maybeText = updates[_items[i].id];
-      if (maybeText != null) {
-        _items[i] = _items[i].copyWith(mainText: maybeText);
+      for (var i = 0; i < _items.length; i++) {
+        final content = updates[_items[i].id];
+        if (content != null) {
+          _items[i] = _items[i].copyWith(
+            mainText: content.mainText ?? _items[i].mainText,
+            imageUrl: content.imageUrl ?? _items[i].imageUrl,
+          );
+        }
       }
+      notifyListeners();
+    } finally {
+      _backfillInProgress = false;
     }
-
-    notifyListeners();
   }
-
   // ---------------------------------------------------------------------------
   // FILTERS / SORTING (the ones news_page.dart calls)
   // ---------------------------------------------------------------------------

@@ -77,11 +77,15 @@ Future<List<FeedItem>> getAllArticles() async {
       whereArgs: [id],
     );
   }
-  Future<void> updateMainText(String id, String mainText) async {
+  Future<void> updateContent(String id, String? mainText, String? imageUrl) async {
     final db = await _dbService.database;
+    final updates = <String, Object?>{};
+    if (mainText != null) updates['mainText'] = mainText;
+    if (imageUrl != null) updates['imageUrl'] = imageUrl;
+    if (updates.isEmpty) return;
     await db.update(
       'articles',
-      {'mainText': mainText},
+      updates,
       where: 'id = ?',
       whereArgs: [id],
     );

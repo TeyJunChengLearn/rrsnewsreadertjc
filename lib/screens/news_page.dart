@@ -25,6 +25,15 @@ class NewsPage extends StatefulWidget {
 class _NewsPageState extends State<NewsPage> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
+@override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<RssProvider>().backfillArticleContent();
+    });
+  }
+
   // Local filter state (defaults = show all)
   _LocalReadFilter _readFilter = _LocalReadFilter.all;
   _LocalBookmarkFilter _bmFilter = _LocalBookmarkFilter.all;

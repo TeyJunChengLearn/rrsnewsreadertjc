@@ -8,6 +8,8 @@ import '../services/rss_service.dart';
 import '../services/article_dao.dart';
 import '../services/feed_source_dao.dart';
 import '../services/article_content_service.dart';
+import '../services/readability_service.dart';
+
 class FeedRepository {
   final RssService rssService;
   final ArticleDao articleDao;
@@ -107,7 +109,9 @@ class FeedRepository {
     // ArticleDao already returns them ordered newest-first.
     return await articleDao.getAllArticles();
   }
-  Future<Map<String, String>> populateMainText(List<FeedItem> items) async {
+  Future<Map<String, ArticleReadabilityResult>> populateArticleContent(
+    List<FeedItem> items,
+  ) async {
     return await articleContentService.backfillMissingContent(items);
   }
   // ---------------------------------------------------------------------------
