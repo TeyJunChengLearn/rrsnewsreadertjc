@@ -8,9 +8,11 @@ void main() {
   group('Readability4JExtended', () {
     test('returns main text and lead image when available', () async {
       const html = '''
-        <html>
+       <html>
           <head>
+            <title>Sample headline</title>
             <meta property="og:image" content="/images/lead.jpg" />
+            <meta property="og:title" content="OG Headline" />
           </head>
           <body>
             <article>
@@ -31,6 +33,7 @@ void main() {
       expect(result, isNotNull);
       expect(result!.mainText, 'Example text in the article body.');
       expect(result.imageUrl, 'https://example.com/images/lead.jpg');
+      expect(result.pageTitle, 'OG Headline');
     });
   });
 }

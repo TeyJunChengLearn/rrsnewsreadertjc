@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 class ArticleReadabilityResult {
   final String? mainText;
   final String? imageUrl;
-
-  const ArticleReadabilityResult({this.mainText, this.imageUrl});
+  final String? pageTitle;
+  const ArticleReadabilityResult({this.mainText, this.imageUrl, this.pageTitle});
 
   bool get hasContent =>
       (mainText != null && mainText!.isNotEmpty) ||
@@ -51,6 +51,9 @@ class Readability4JExtended {
 
       _stripNoise(doc);
 
+      final title = _extractPageTitle(doc);
+
+
       final dom.Element? articleRoot = _findArticleRoot(doc);
 
       if (articleRoot == null) {
@@ -70,6 +73,7 @@ class Readability4JExtended {
       final result = ArticleReadabilityResult(
         mainText: normalized,
         imageUrl: heroImage,
+        pageTitle: title,
       );
 
       return result.hasContent ? result : null;
@@ -132,8 +136,21 @@ class Readability4JExtended {
         el.remove();
       }
     }
+    
   }
+String? _extractPageTitle(dom.Document doc) {
+    // Prefer Open Graph/Twitter title if available
+    final og = doc.querySelector('meta[property="og:title"]')?.attributes['content'];
+    if (og != null && og.trim().isNotEmpty) return og.trim();
 
+    final twitter = doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
+    if (twitter != null && twitter.trim().isNotEmpty) return twitter.trim();
+
+    final plainTitle = doc.querySelector('title')?.text;
+    if (plainTitle != null && plainTitle.trim().isNotEmpty) return plainTitle.trim();
+
+    return null;
+  }
   // ---------------------------------------------------------------------------
   // Article container selection
   // ---------------------------------------------------------------------------
