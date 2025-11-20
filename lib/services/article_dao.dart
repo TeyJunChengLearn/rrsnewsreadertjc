@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+
 import '../models/feed_item.dart';
 import 'database_service.dart';
 
@@ -7,14 +8,14 @@ class ArticleDao {
   ArticleDao(this._dbService);
 
 Future<List<FeedItem>> getAllArticles() async {
-  final db = await _dbService.database;
-  final rows = await db.query(
-    'articles',
-    // NOTE: we do NOT filter isRead here; UI will decide what to hide/show.
-    orderBy: 'pubDateMillis DESC',
-  );
-  return rows.map(FeedItem.fromMap).toList();
-}
+    final db = await _dbService.database;
+    final rows = await db.query(
+      'articles',
+      // NOTE: we do NOT filter isRead here; UI will decide what to hide/show.
+      orderBy: 'pubDateMillis DESC',
+    );
+    return rows.map(FeedItem.fromMap).toList();
+  }
 
 
   Future<void> upsertArticles(List<FeedItem> items) async {
@@ -54,9 +55,14 @@ Future<List<FeedItem>> getAllArticles() async {
 
   Future<void> updateReadStatus(String id, int isRead) async {
     final db = await _dbService.database;
+    final clamped = (isRead == 2)
+        ? 2
+        : isRead == 1
+            ? 1
+            : 0;
     await db.update(
       'articles',
-      {'isRead': isRead == 1 ? 1 : 0},
+       {'isRead': clamped},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -71,16 +77,16 @@ Future<List<FeedItem>> getAllArticles() async {
       whereArgs: [id],
     );
   }
+  Future<void> updateMainText(String id, String mainText) async {
+    final db = await _dbService.database;
+    await db.update(
+      'articles',
+      {'mainText': mainText},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 
-  // In lib/services/article_dao.dart
-// Replace your existing method with this version.
-// Keeps only the newest `keepCount` UNREAD & UNBOOKMARKED articles globally.
-// Bookmarked items are never deleted. Read items are ignored.
-// Per-feed cap: keep only newest `keepCount` UNBOOKMARKED for a given sourceTitle.
-// Bookmarked rows are preserved. Sorted by pubDateMillis desc then id.
-// Per-feed cap: keep only newest `keepCount` UNBOOKMARKED for a given sourceTitle.
-// Bookmarked rows are preserved. Sort by pubDateMillis DESC, then id DESC.
-// Uses OFFSET trick so we delete "everything after the top N".
   Future<int> enforceUnbookmarkedLimitForSourceTitle(
     String sourceTitle,
     int keepCount,
@@ -90,19 +96,19 @@ Future<List<FeedItem>> getAllArticles() async {
     // Delete all rows beyond the newest `keepCount`
     // NOTE: LIMIT -1 OFFSET ? means "skip the first N rows, delete the rest"
     final deleted = await db.rawDelete('''
-    DELETE FROM articles
-    WHERE COALESCE(isBookmarked, 0) = 0
-      AND sourceTitle = ?
-      AND id IN (
-        SELECT id FROM articles
-        WHERE COALESCE(isBookmarked, 0) = 0
-          AND sourceTitle = ?
-        ORDER BY 
-          CASE WHEN pubDateMillis IS NULL THEN 0 ELSE pubDateMillis END DESC,
-          id DESC
-        LIMIT -1 OFFSET ?
-      )
-  ''', [sourceTitle, sourceTitle, keepCount]);
+     DELETE FROM articles
+      WHERE COALESCE(isBookmarked, 0) = 0
+        AND sourceTitle = ?
+        AND id IN (
+          SELECT id FROM articles
+          WHERE COALESCE(isBookmarked, 0) = 0
+            AND sourceTitle = ?
+          ORDER BY
+            CASE WHEN pubDateMillis IS NULL THEN 0 ELSE pubDateMillis END DESC,
+            id DESC
+          LIMIT -1 OFFSET ?
+        )
+    ''', [sourceTitle, sourceTitle, keepCount]);
 
     return deleted;
   }

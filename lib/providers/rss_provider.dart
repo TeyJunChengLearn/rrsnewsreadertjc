@@ -148,6 +148,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
+              await _backfillArticleBodies();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -180,6 +181,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
+         await _backfillArticleBodies();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -226,6 +228,19 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
     notifyListeners();
 
     await repo.setRead(item.id, read);
+  }
+  Future<void> _backfillArticleBodies() async {
+    final updates = await repo.populateMainText(_items);
+    if (updates.isEmpty) return;
+
+    for (var i = 0; i < _items.length; i++) {
+      final maybeText = updates[_items[i].id];
+      if (maybeText != null) {
+        _items[i] = _items[i].copyWith(mainText: maybeText);
+      }
+    }
+
+    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------

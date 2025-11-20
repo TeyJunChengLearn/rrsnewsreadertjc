@@ -8,6 +8,8 @@ import 'providers/rss_provider.dart';
 import 'services/database_service.dart';
 import 'services/article_dao.dart';
 import 'services/feed_source_dao.dart';
+import 'services/readability_service.dart';
+import 'services/article_content_service.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -48,6 +50,16 @@ class AppBootstrap extends StatelessWidget {
         ProxyProvider<DatabaseService, FeedSourceDao>(
           update: (_, db, __) => FeedSourceDao(db),
         ),
+        Provider<Readability4JExtended>(
+          create: (_) => Readability4JExtended(),
+        ),
+
+        ProxyProvider2<Readability4JExtended, ArticleDao, ArticleContentService>(
+          update: (_, readability, articleDao, __) => ArticleContentService(
+            readability: readability,
+            articleDao: articleDao,
+          ),
+        ),
 
         // LOW LEVEL RSS
         Provider<RssService>(
@@ -58,12 +70,14 @@ class AppBootstrap extends StatelessWidget {
         ),
 
         // REPOSITORY = RSS + DB
-        ProxyProvider3<RssService, ArticleDao, FeedSourceDao, FeedRepository>(
-          update: (_, rssService, articleDao, feedSourceDao, __) =>
+        ProxyProvider4<RssService, ArticleDao, FeedSourceDao, ArticleContentService,
+            FeedRepository>(
+          update: (_, rssService, articleDao, feedSourceDao, articleContent, __) =>
               FeedRepository(
             rssService: rssService,
             articleDao: articleDao,
             feedSourceDao: feedSourceDao,
+             articleContentService: articleContent,
           ),
         ),
 

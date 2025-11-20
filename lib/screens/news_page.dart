@@ -67,63 +67,59 @@ class _NewsPageState extends State<NewsPage> {
   }
 
  // 0 = unread, 1 = read, 2 = hidden
-int _rcOf(FeedItem it) {
-  // If model has a readCode field, use it
-  try {
-    final dynamic dyn = it as dynamic;
-    final rc = dyn.readCode;
-    if (rc is int) return rc;
-  } catch (_) {
-    // ignore and fall through
-  }
 
   // Otherwise use isRead directly (we store 0/1/2 there)
-  final v = it.isRead;
-  if (v == 0 || v == 1 || v == 2) return v;
+  int _rcOf(FeedItem it) {
+    // If model has a readCode field, use it
+    try {
+      final dynamic dyn = it as dynamic;
+      final rc = dyn.readCode;
+      if (rc is int) return rc;
+    } catch (_) {
+      // ignore and fall through
+    }
+     final v = it.isRead;
+    if (v == 0 || v == 1 || v == 2) return v;
 
-  // Safety fallback for weird values
-  return v == 1 ? 1 : 0;
-}
+    // Safety fallback for weird values
+    return v == 1 ? 1 : 0;
+  }
+
 
 
   List<FeedItem> _buildAllFeeds(RssProvider rss) {
-  // Start from ALL items (unfiltered from provider)
   List<FeedItem> list = List<FeedItem>.from(rss.allItems);
+    final bool bookmarkedOnly =
+        _bmFilter == _LocalBookmarkFilter.bookmarkedOnly;
+    final bool unreadOnly = _readFilter == _LocalReadFilter.unreadOnly;
+    final bool readOnly = _readFilter == _LocalReadFilter.readOnly;
+    // 1) Hide rc==2 by default, BUT keep them if Read-only OR Bookmarked-only is active.
+    if (!(bookmarkedOnly || readOnly)) {
+      list.removeWhere((it) => _rcOf(it) == 2);
+    }
 
-  // Helper: delegate to _rcOf
-  int rcOf(FeedItem it) => _rcOf(it);
 
-  final bool bookmarkedOnly = _bmFilter == _LocalBookmarkFilter.bookmarkedOnly;
-  final bool unreadOnly     = _readFilter == _LocalReadFilter.unreadOnly;
-  final bool readOnly       = _readFilter == _LocalReadFilter.readOnly;
-
-  // 1) Hide rc==2 by default, BUT keep them if Read-only OR Bookmarked-only is active.
-  if (!(bookmarkedOnly || readOnly)) {
-    list.removeWhere((it) => rcOf(it) == 2);
-  }
-
-  // 2) Bookmark filter
-  if (bookmarkedOnly) {
-    list.retainWhere((e) => e.isBookmarked);
-  }
+   // 2) Bookmark filter
+    if (bookmarkedOnly) {
+      list.retainWhere((e) => e.isBookmarked);
+    }
 
   // 3) Read filter
-  if (unreadOnly) {
-    list.retainWhere((e) => rcOf(e) == 0);
-  } else if (readOnly) {
-    list.retainWhere((e) => rcOf(e) >= 1); // includes hidden (2)
-  }
+ if (unreadOnly) {
+      list.retainWhere((e) => _rcOf(e) == 0);
+    } else if (readOnly) {
+      list.retainWhere((e) => _rcOf(e) >= 1); // includes hidden (2)
+    }
 
   // 4) Sort
-  int t(FeedItem x) => x.pubDate?.millisecondsSinceEpoch ?? 0;
-  list.sort((a, b) =>
-      _sortOrder == _LocalSortOrder.latestFirst
-          ? t(b).compareTo(t(a))
-          : t(a).compareTo(t(b)));
+    int t(FeedItem x) => x.pubDate?.millisecondsSinceEpoch ?? 0;
+    list.sort(
+      (a, b) => _sortOrder == _LocalSortOrder.latestFirst
+      ? t(b).compareTo(t(a)): t(a).compareTo(t(b)),
+    );
 
-  return list;
-}
-
+    return list;
+  }
 
 
   @override
@@ -498,7 +494,7 @@ class _ArticleRow extends StatelessWidget {
     final ago = rss.niceTimeAgo(item.pubDate);
     final isBookmarked = item.isBookmarked;
     final bool isReadLike = item.isRead >= 1; // 1 and 2 both count as "read"
-
+    final bool hasMainArticle = (item.mainText ?? '').isNotEmpty;
     final Color unreadTitleColor = Theme.of(context).colorScheme.onSurface;
     final Color readTitleColor = Colors.grey.shade600;
 
@@ -513,7 +509,7 @@ class _ArticleRow extends StatelessWidget {
 
     final thumbUrl = item.imageUrl ?? '';
     final url = item.link; // if your model uses String?, make it `item.link ?? ''`
-
+    final Color accentRing = hasMainArticle ? Colors.green : Colors.grey.shade400;
     return InkWell(
       onTap: () {
         rss.markRead(item);
@@ -576,16 +572,21 @@ class _ArticleRow extends StatelessWidget {
             SizedBox(
               width: 90,
               height: 90,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: thumbUrl.isNotEmpty
-                    ? Image.network(thumbUrl, fit: BoxFit.cover)
-                    : Container(
-                        color: Colors.grey.shade300,
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.image_not_supported),
-                      ),
-              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: accentRing, width: 3),
+                ),
+                padding: const EdgeInsets.all(4),
+                child: ClipOval(
+                  child: thumbUrl.isNotEmpty
+                      ? Image.network(thumbUrl, fit: BoxFit.cover)
+                      : Container(
+                          color: Colors.grey.shade300,
+                          alignment: Alignment.center,
+                          child: const Icon(Icons.image_not_supported),
+                        ),
+                ),),
             ),
           ],
         ),

@@ -6,6 +6,7 @@ class FeedItem {
   final String? description;
   final String? imageUrl;
   final DateTime? pubDate;
+  final String? mainText;
 
   final int isRead;
   final bool isBookmarked;
@@ -18,6 +19,7 @@ class FeedItem {
     this.description,
     this.imageUrl,
     this.pubDate,
+    this.mainText,
     this.isRead = 0,
     this.isBookmarked = false,
   });
@@ -30,6 +32,7 @@ class FeedItem {
     String? description,
     String? imageUrl,
     DateTime? pubDate,
+    String? mainText,
     int? isRead,
     bool? isBookmarked,
   }) {
@@ -41,12 +44,20 @@ class FeedItem {
       description: description ?? this.description,
       imageUrl: imageUrl ?? this.imageUrl,
       pubDate: pubDate ?? this.pubDate,
+      mainText: mainText ?? this.mainText,
       isRead: isRead ?? this.isRead,
       isBookmarked: isBookmarked ?? this.isBookmarked,
     );
   }
 
   Map<String, dynamic> toMap() {
+     final int normalizedRead;
+    if (isRead == 0 || isRead == 1 || isRead == 2) {
+      normalizedRead = isRead;
+    } else {
+      normalizedRead = isRead == 1 ? 1 : 0;
+    }
+
     return {
       'id': id,
       'sourceTitle': sourceTitle,
@@ -55,7 +66,8 @@ class FeedItem {
       'description': description,
       'imageUrl': imageUrl,
       'pubDateMillis': pubDate?.millisecondsSinceEpoch,
-      'isRead': isRead == 1 ? 1 : 0,
+      'mainText': mainText,
+      'isRead': normalizedRead,
       'isBookmarked': isBookmarked ? 1 : 0,
     };
   }
@@ -73,7 +85,7 @@ class FeedItem {
           : DateTime.fromMillisecondsSinceEpoch(
               map['pubDateMillis'] as int,
             ),
-      // ✅ FIX: keep isRead as int (0/1/2), not bool
+      mainText: map['mainText'] as String?,
       isRead: (map['isRead'] as int?) ?? 0,
       isBookmarked: (map['isBookmarked'] ?? 0) == 1,
     );
