@@ -698,7 +698,7 @@ Future<void> _toggleTranslateToSetting() async {
     await _highlightLine(_currentLine);
 
     setState(() {
-        _isPlaying = false;
+        _isPlaying = true;
         _webHighlightText = null;
       });
     await _tts.stop();
