@@ -220,7 +220,7 @@ class ArticleWebviewPage extends StatefulWidget {
 class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   late final WebViewController _controller;
   final FlutterTts _tts = FlutterTts();
-final FlutterLocalNotificationsPlugin _notifications =
+  final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
 
   bool _isLoading = true;
@@ -243,7 +243,7 @@ final FlutterLocalNotificationsPlugin _notifications =
   TranslateLanguage? _srcLangDetected;
 
   static const int _readingNotificationId = 22;
- String? _webHighlightText;
+  String? _webHighlightText;
   @override
   void initState() {
     super.initState();
@@ -271,47 +271,48 @@ final FlutterLocalNotificationsPlugin _notifications =
 
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
-Future<void> _applyTtsLocale(String bcpCode) async {
-  await _tts.setLanguage(_ttsLocaleForCode(bcpCode));
-  try {
-    final List<dynamic>? voices = await _tts.getVoices;
-    if (voices == null || voices.isEmpty) return;
+  Future<void> _applyTtsLocale(String bcpCode) async {
+    await _tts.setLanguage(_ttsLocaleForCode(bcpCode));
+    try {
+      final List<dynamic>? voices = await _tts.getVoices;
+      if (voices == null || voices.isEmpty) return;
 
-    final lc = bcpCode.toLowerCase();
-    final base = lc.split('-').first;
+      final lc = bcpCode.toLowerCase();
+      final base = lc.split('-').first;
 
-    // Normalize voices into a list of Map<String, dynamic>
-    final List<Map<String, dynamic>> parsed = voices
-        .whereType<Map>()
-        .map<Map<String, dynamic>>((m) {
-          final map = <String, dynamic>{};
-          (m as Map).forEach((key, value) {
-            map[key.toString()] = value;
-          });
-          return map;
-        })
-        .toList();
+      // Normalize voices into a list of Map<String, dynamic>
+      final List<Map<String, dynamic>> parsed = voices
+          .whereType<Map>()
+          .map<Map<String, dynamic>>((m) {
+            final map = <String, dynamic>{};
+            (m as Map).forEach((key, value) {
+              map[key.toString()] = value;
+            });
+            return map;
+          })
+          .toList();
 
-    if (parsed.isEmpty) return;
+      if (parsed.isEmpty) return;
 
-    Map<String, dynamic> chosen = parsed.firstWhere(
-      (v) => (v['locale'] ?? '').toString().toLowerCase() == lc,
-      orElse: () => parsed.firstWhere(
-        (v) => (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
-        orElse: () => parsed.first,
-      ),
-    );
+      Map<String, dynamic> chosen = parsed.firstWhere(
+        (v) => (v['locale'] ?? '').toString().toLowerCase() == lc,
+        orElse: () => parsed.firstWhere(
+          (v) =>
+              (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
+          orElse: () => parsed.first,
+        ),
+      );
 
-    if (chosen.isEmpty) return;
+      if (chosen.isEmpty) return;
 
-    await _tts.setVoice({
-      'name': chosen['name'],
-      'locale': chosen['locale'],
-    });
-  } catch (_) {
+      await _tts.setVoice({
+        'name': chosen['name'],
+        'locale': chosen['locale'],
+      });
+    } catch (_) {
     // ignore if voices are not supported or any error occurs
+    }
   }
-}
 
   // ---------------- WebView + Reader ----------------
 
@@ -332,7 +333,7 @@ Future<void> _applyTtsLocale(String bcpCode) async {
     // Default: show full website
     _controller.loadRequest(Uri.parse(widget.url));
   }
-    Future<void> _initNotifications() async {
+  Future<void> _initNotifications() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: ios);
@@ -394,7 +395,8 @@ Future<void> _applyTtsLocale(String bcpCode) async {
       if (text.isEmpty) return;
       setState(() => _webHighlightText = text);
       await _highlightInWebPage(text);
-    
+    }
+  }
       Future<void> _highlightInWebPage(String text) async {
     try {
       final escaped = jsonEncode(text);
