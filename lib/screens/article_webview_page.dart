@@ -241,6 +241,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isTranslating = false;
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
+  bool _hasInternalPageInHistory = false;
 
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
@@ -256,12 +257,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         _isTranslatedView = false;
         _originalLinesCache = null;
         _webHighlightText = null;
+        _hasInternalPageInHistory = true;
       });
 
       await _controller.loadRequest(Uri.parse(widget.url));
       return false;
     }
-
+    if (_hasInternalPageInHistory) {
+      return true;
+    }
     if (await _controller.canGoBack()) {
       await _controller.goBack();
       return false;
@@ -474,6 +478,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
 
     final html = _buildReaderHtml(_lines, _heroImageUrl);
+    _hasInternalPageInHistory = true;
+
     await _controller.loadRequest(
       Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
     );
@@ -885,6 +891,9 @@ Future<void> _toggleTranslateToSetting() async {
       _isTranslatedView = false;
       _originalLinesCache = null;
       _webHighlightText = null;
+       if (_readerOn) {
+        _hasInternalPageInHistory = true;
+      }
     });
 
     if (_readerOn) {
