@@ -938,8 +938,9 @@ Future<void> _toggleTranslateToSetting() async {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : Icon(_isTranslatedView ? Icons.undo : Icons.g_translate),
-                onPressed:
-                    (_isLoading || _isTranslating) ? null : _toggleTranslateToSetting,
+                onPressed: (_isLoading || _isTranslating)
+                    ? null
+                    : _toggleTranslateToSetting,
                 tooltip: _isTranslatedView ? 'Show original' : 'Translate',
               ),
             if (!_readerOn)
@@ -992,7 +993,6 @@ Future<void> _toggleTranslateToSetting() async {
                   ),
                 ),
               ),
-            ),
         ],
         ),
         bottomNavigationBar: SafeArea(
@@ -1019,6 +1019,7 @@ Future<void> _toggleTranslateToSetting() async {
                 IconButton(
                     icon: const Icon(Icons.skip_next), onPressed: _goToLast),
               ],
+            ),
           ),
         ),
       ),
