@@ -397,7 +397,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       await _highlightInWebPage(text);
     }
   }
-      Future<void> _highlightInWebPage(String text) async {
+    Future<void> _highlightInWebPage(String text) async {
     try {
       final escaped = jsonEncode(text);
       final script = '''
