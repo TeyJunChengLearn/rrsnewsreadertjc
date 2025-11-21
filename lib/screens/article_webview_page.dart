@@ -244,6 +244,31 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
+
+  Future<bool> _handleBackNavigation() async {
+    await _stopSpeaking();
+
+    if (!mounted) return true;
+
+    if (_readerOn) {
+      setState(() {
+        _readerOn = false;
+        _isTranslatedView = false;
+        _originalLinesCache = null;
+        _webHighlightText = null;
+      });
+
+      await _controller.loadRequest(Uri.parse(widget.url));
+      return false;
+    }
+
+    if (await _controller.canGoBack()) {
+      await _controller.goBack();
+      return false;
+    }
+
+    return true;
+  }
   @override
   void initState() {
     super.initState();
@@ -884,80 +909,83 @@ Future<void> _toggleTranslateToSetting() async {
     final settings = context.watch<SettingsProvider>();
     final canTranslate = settings.translateLangCode != 'off';
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const SizedBox.shrink(),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () async {
-            await _stopSpeaking();
-            if (mounted) {
-              Navigator.of(context).maybePop();
-            }
-          },
-        ),
-        actions: [
-          IconButton(
-            icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
-            onPressed: _toggleReader,
-            tooltip: _readerOn ? 'Show original page' : 'Reader mode',
+     return WillPopScope(
+      onWillPop: _handleBackNavigation,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const SizedBox.shrink(),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              final shouldPop = await _handleBackNavigation();
+              if (shouldPop && mounted) {
+                Navigator.of(context).maybePop();
+              }
+            },
           ),
-          if (canTranslate)
+        actions: [
             IconButton(
-              icon: (_isLoading || _isTranslating)
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Icon(_isTranslatedView ? Icons.undo : Icons.g_translate),
-              onPressed:
-                  (_isLoading || _isTranslating) ? null : _toggleTranslateToSetting,
-              tooltip: _isTranslatedView ? 'Show original' : 'Translate',
+              icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
+              onPressed: _toggleReader,
+              tooltip: _readerOn ? 'Show original page' : 'Reader mode',
             ),
-          if (!_readerOn)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: () => _controller.reload(),
-            ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          WebViewWidget(controller: _controller),
-          if (_isLoading)
-            const LinearProgressIndicator(
-              minHeight: 2,
-            ),
-             if (!_readerOn &&
-              settings.highlightText &&
-              (_webHighlightText?.isNotEmpty ?? false))
-            Positioned(
-              top: 12,
-              left: 12,
-              right: 12,
-              child: SafeArea(
-                child: IgnorePointer(
-                  ignoring: true,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.yellow.shade100.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black26,
-                          blurRadius: 6,
-                          offset: Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Text(
-                        _webHighlightText ?? '',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
+        if (canTranslate)
+              IconButton(
+                icon: (_isLoading || _isTranslating)
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(_isTranslatedView ? Icons.undo : Icons.g_translate),
+                onPressed:
+                    (_isLoading || _isTranslating) ? null : _toggleTranslateToSetting,
+                tooltip: _isTranslatedView ? 'Show original' : 'Translate',
+              ),
+            if (!_readerOn)
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: () => _controller.reload(),
+              ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_isLoading)
+              const LinearProgressIndicator(
+                minHeight: 2,
+              ),
+            if (!_readerOn &&
+                settings.highlightText &&
+                (_webHighlightText?.isNotEmpty ?? false))
+              Positioned(
+                top: 12,
+                left: 12,
+                right: 12,
+                child: SafeArea(
+                  child: IgnorePointer(
+                    ignoring: true,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.yellow.shade100.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 6,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: Text(
+                          _webHighlightText ?? '',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ),
@@ -966,31 +994,31 @@ Future<void> _toggleTranslateToSetting() async {
               ),
             ),
         ],
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          color: Theme.of(context).colorScheme.surface,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              IconButton(
-                  icon: const Icon(Icons.skip_previous),
-                  onPressed: _goToFirst),
-              IconButton(
-                  icon: const Icon(Icons.fast_rewind),
-                  onPressed: _speakPrevLine),
-              IconButton(
-                icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
-                onPressed: _isPlaying ? _stopSpeaking : _speakCurrentLine,
-                iconSize: 32,
-              ),
-              IconButton(
-                  icon: const Icon(Icons.fast_forward),
-                  onPressed: _speakNextLine),
-              IconButton(
-                  icon: const Icon(Icons.skip_next), onPressed: _goToLast),
-            ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Container(
+            color: Theme.of(context).colorScheme.surface,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                    icon: const Icon(Icons.skip_previous),
+                    onPressed: _goToFirst),
+                IconButton(
+                    icon: const Icon(Icons.fast_rewind),
+                    onPressed: _speakPrevLine),
+                IconButton(
+                  icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+                  onPressed: _isPlaying ? _stopSpeaking : _speakCurrentLine,
+                  iconSize: 32,
+                ),
+                IconButton(
+                    icon: const Icon(Icons.fast_forward),
+                    onPressed: _speakNextLine),
+                IconButton(
+                    icon: const Icon(Icons.skip_next), onPressed: _goToLast),
+              ],
           ),
         ),
       ),
