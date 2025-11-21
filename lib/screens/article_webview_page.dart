@@ -398,51 +398,50 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
   }
     Future<void> _highlightInWebPage(String text) async {
-    try {
-      final escaped = jsonEncode(text);
-      final script = '''
-        (function(txt){
-          if(!txt){return;}
-          const cls='flutter-tts-highlight';
-          document.querySelectorAll('mark.'+cls).forEach(m=>{
-            const parent=m.parentNode;
-            if(!parent){return;}
-            parent.replaceChild(document.createTextNode(m.textContent||''), m);
-            parent.normalize();
-          });
-          const regexText = txt.replace(/[-/\\^$*+?.()|[\\]{}]/g,'\\$&');
-          const regex = new RegExp(regexText,'i');
-          function walk(node){
-            if(!node){return false;}
-            if(node.nodeType===3){
-              const match = regex.exec(node.data);
-              if(match){
-                const range=document.createRange();
-                range.setStart(node, match.index);
-                range.setEnd(node, match.index + match[0].length);
-                const mark=document.createElement('mark');
-                mark.className=cls;
-                mark.style.backgroundColor='rgba(255,235,59,0.4)';
-                range.surroundContents(mark);
-                mark.scrollIntoView({behavior:'smooth', block:'center'});
-                return true;
-              }
-            }
-            const children = Array.from(node.childNodes||[]);
-            for(let i=0;i<children.length;i++){
-              if(walk(children[i])) return true;
-            }
-            return false;
-          }
-          walk(document.body);
-        })($escaped);
-      ''';
-
-      await _controller.runJavaScript(script);
-    } catch (_) {
-      // ignore failures silently
+  try {
+    final escaped = jsonEncode(text);
+    final script = '''
+(function(txt){
+  if(!txt){return;}
+  const cls='flutter-tts-highlight';
+  document.querySelectorAll('mark.'+cls).forEach(m=>{
+    const parent=m.parentNode;
+    if(!parent){return;}
+    parent.replaceChild(document.createTextNode(m.textContent||''), m);
+    parent.normalize();
+  });
+  const regexText = txt.replace(/[.*+?^\${}()|[\\]\\\\]/g,"\\\\\$&");
+  const regex = new RegExp(regexText,'i');
+  function walk(node){
+    if(!node){return false;}
+    if(node.nodeType===3){
+      const match = regex.exec(node.data);
+      if(match){
+        const range=document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        const mark=document.createElement('mark');
+        mark.className=cls;
+        mark.style.backgroundColor='rgba(255,235,59,0.4)';
+        range.surroundContents(mark);
+        mark.scrollIntoView({behavior:'smooth', block:'center'});
+        return true;
+      }
     }
+    const children = Array.from(node.childNodes||[]);
+    for(let i=0;i<children.length;i++){
+      if(walk(children[i])) return true;
+    }
+    return false;
   }
+  walk(document.body);
+})($escaped);
+''';
+    await _controller.runJavaScript(script);
+  } catch (_) {
+    // ignore failures silently
+  }
+}
   Future<void> _reloadReaderHtml({bool showLoading = false}) async {
     if (!_readerOn) return;
     if (showLoading && mounted) {

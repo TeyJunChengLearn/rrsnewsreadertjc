@@ -38,6 +38,7 @@ class ArticleContentService {
       updated[item.id] = ArticleReadabilityResult(
         mainText: updates['mainText'],
         imageUrl: updates['imageUrl'],
+        pageTitle: content.pageTitle,
       );
     }
 
