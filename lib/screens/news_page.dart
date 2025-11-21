@@ -527,7 +527,14 @@ class _ArticleRow extends StatelessWidget {
               .showSnackBar(const SnackBar(content: Text('No article URL available.')));
           return;
         }
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => ArticleWebviewPage(url: url)));
+         Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ArticleWebviewPage(
+              url: url,
+              title: item.title,
+            ),
+          ),
+        );
       },
       child: Padding(
         padding: const EdgeInsets.only(bottom: 24.0),

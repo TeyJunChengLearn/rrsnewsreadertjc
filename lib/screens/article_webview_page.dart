@@ -8,6 +8,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 
 import '../providers/settings_provider.dart';
 import '../services/readability_service.dart';
@@ -218,6 +220,8 @@ class ArticleWebviewPage extends StatefulWidget {
 class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   late final WebViewController _controller;
   final FlutterTts _tts = FlutterTts();
+final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
 
   bool _isLoading = true;
   bool _readerOn = false;
@@ -238,7 +242,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
 
-
+  static const int _readingNotificationId = 22;
  String? _webHighlightText;
   @override
   void initState() {
@@ -258,7 +262,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         setState(() => _isPlaying = false);
       }
     });
-
+    unawaited(_initNotifications());
     // Preload Readability text in background so TTS/translate work in both modes
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensureLinesLoaded();
@@ -328,7 +332,12 @@ Future<void> _applyTtsLocale(String bcpCode) async {
     // Default: show full website
     _controller.loadRequest(Uri.parse(widget.url));
   }
-
+    Future<void> _initNotifications() async {
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const ios = DarwinInitializationSettings();
+    const settings = InitializationSettings(android: android, iOS: ios);
+    await _notifications.initialize(settings);
+  }
   Future<void> _loadReaderContent() async {
     setState(() {
       _isLoading = true;
@@ -384,6 +393,52 @@ Future<void> _applyTtsLocale(String bcpCode) async {
       final text = _lines[index].trim();
       if (text.isEmpty) return;
       setState(() => _webHighlightText = text);
+      await _highlightInWebPage(text);
+    
+      Future<void> _highlightInWebPage(String text) async {
+    try {
+      final escaped = jsonEncode(text);
+      final script = '''
+        (function(txt){
+          if(!txt){return;}
+          const cls='flutter-tts-highlight';
+          document.querySelectorAll('mark.'+cls).forEach(m=>{
+            const parent=m.parentNode;
+            if(!parent){return;}
+            parent.replaceChild(document.createTextNode(m.textContent||''), m);
+            parent.normalize();
+          });
+          const regexText = txt.replace(/[-/\\^$*+?.()|[\\]{}]/g,'\\$&');
+          const regex = new RegExp(regexText,'i');
+          function walk(node){
+            if(!node){return false;}
+            if(node.nodeType===3){
+              const match = regex.exec(node.data);
+              if(match){
+                const range=document.createRange();
+                range.setStart(node, match.index);
+                range.setEnd(node, match.index + match[0].length);
+                const mark=document.createElement('mark');
+                mark.className=cls;
+                mark.style.backgroundColor='rgba(255,235,59,0.4)';
+                range.surroundContents(mark);
+                mark.scrollIntoView({behavior:'smooth', block:'center'});
+                return true;
+              }
+            }
+            const children = Array.from(node.childNodes||[]);
+            for(let i=0;i<children.length;i++){
+              if(walk(children[i])) return true;
+            }
+            return false;
+          }
+          walk(document.body);
+        })($escaped);
+      ''';
+
+      await _controller.runJavaScript(script);
+    } catch (_) {
+      // ignore failures silently
     }
   }
   Future<void> _reloadReaderHtml({bool showLoading = false}) async {
@@ -659,7 +714,10 @@ Future<void> _toggleTranslateToSetting() async {
 
     // 👇 Build final lines list: optional header + article content
     final combined = <String>[];
-    final header = (widget.title ?? '').trim();
+    final header = ((widget.title ?? '').trim().isNotEmpty
+            ? (widget.title ?? '').trim()
+            : (result.pageTitle ?? '').trim())
+        .trim();
     if (header.isNotEmpty) {
       combined.add(header);
     }
@@ -701,6 +759,7 @@ Future<void> _toggleTranslateToSetting() async {
         _isPlaying = true;
         _webHighlightText = null;
       });
+       await _showReadingNotification(text);
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -709,6 +768,7 @@ Future<void> _toggleTranslateToSetting() async {
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
       setState(() => _isPlaying = false);
+      await _clearReadingNotification();
       return;
     }
 
@@ -716,6 +776,7 @@ Future<void> _toggleTranslateToSetting() async {
 
     if (i >= _lines.length) {
       setState(() => _isPlaying = false);
+      await _clearReadingNotification();
       return;
     }
 
@@ -738,6 +799,7 @@ Future<void> _toggleTranslateToSetting() async {
     await _tts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
+      await _clearReadingNotification();
     }
   }
 
@@ -757,7 +819,38 @@ Future<void> _toggleTranslateToSetting() async {
     setState(() => _currentLine = i);
     await _speakCurrentLine();
   }
+  Future<void> _showReadingNotification(String lineText) async {
+    final title = (widget.title?.isNotEmpty ?? false)
+        ? widget.title!
+        : 'Reading article';
+    final position = '${_currentLine + 1}/${_lines.length}';
+    final android = AndroidNotificationDetails(
+      'reading_channel',
+      'Reading',
+      channelDescription: 'Shows the sentence currently being read aloud.',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: true,
+      onlyAlertOnce: true,
+      styleInformation: BigTextStyleInformation('$lineText'),
+    );
+    const ios = DarwinNotificationDetails(
+      presentAlert: false,
+      presentSound: false,
+      presentBadge: false,
+    );
 
+    await _notifications.show(
+      _readingNotificationId,
+      '$title  ($position)',
+      lineText,
+      NotificationDetails(android: android, iOS: ios),
+    );
+  }
+
+  Future<void> _clearReadingNotification() async {
+    await _notifications.cancel(_readingNotificationId);
+  }
   // --------------- UI ---------------
 
   Future<void> _toggleReader() async {
@@ -781,6 +874,7 @@ Future<void> _toggleTranslateToSetting() async {
   @override
   void dispose() {
     _tts.stop();
+    unawaited(_clearReadingNotification());
     super.dispose();
   }
 
