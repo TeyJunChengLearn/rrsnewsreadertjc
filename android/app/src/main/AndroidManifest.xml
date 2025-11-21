@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+     <!-- Allow the app to fetch RSS feeds and article content on real devices. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:label="TeyJunChengRSS News Reader"
         android:name="${applicationName}"
