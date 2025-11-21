@@ -2,6 +2,8 @@
      <!-- Allow the app to fetch RSS feeds and article content on real devices. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+        <!-- Android 13+ requires this runtime permission for local notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="TeyJunChengRSS News Reader"
         android:name="${applicationName}"
