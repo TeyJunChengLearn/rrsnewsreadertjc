@@ -10,7 +10,6 @@ import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-
 import '../providers/settings_provider.dart';
 import '../services/readability_service.dart';
 
@@ -255,8 +254,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       setState(() {
         _readerOn = false;
         _isTranslatedView = false;
-        _originalLinesCache = null;
-        _webHighlightText = null;
         _hasInternalPageInHistory = true;
       });
 
@@ -273,6 +270,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     return true;
   }
+
   @override
   void initState() {
     super.initState();
@@ -310,24 +308,21 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       final base = lc.split('-').first;
 
       // Normalize voices into a list of Map<String, dynamic>
-      final List<Map<String, dynamic>> parsed = voices
-          .whereType<Map>()
-          .map<Map<String, dynamic>>((m) {
-            final map = <String, dynamic>{};
-            (m as Map).forEach((key, value) {
-              map[key.toString()] = value;
-            });
-            return map;
-          })
-          .toList();
+      final List<Map<String, dynamic>> parsed =
+          voices.whereType<Map>().map<Map<String, dynamic>>((m) {
+        final map = <String, dynamic>{};
+        (m as Map).forEach((key, value) {
+          map[key.toString()] = value;
+        });
+        return map;
+      }).toList();
 
       if (parsed.isEmpty) return;
 
       Map<String, dynamic> chosen = parsed.firstWhere(
         (v) => (v['locale'] ?? '').toString().toLowerCase() == lc,
         orElse: () => parsed.firstWhere(
-          (v) =>
-              (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
+          (v) => (v['locale'] ?? '').toString().toLowerCase().startsWith(base),
           orElse: () => parsed.first,
         ),
       );
@@ -339,7 +334,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         'locale': chosen['locale'],
       });
     } catch (_) {
-    // ignore if voices are not supported or any error occurs
+      // ignore if voices are not supported or any error occurs
     }
   }
 
@@ -362,12 +357,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     // Default: show full website
     _controller.loadRequest(Uri.parse(widget.url));
   }
+
   Future<void> _initNotifications() async {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: ios);
     await _notifications.initialize(settings);
   }
+
   Future<void> _loadReaderContent() async {
     setState(() {
       _isLoading = true;
@@ -426,10 +423,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       await _highlightInWebPage(text);
     }
   }
-    Future<void> _highlightInWebPage(String text) async {
-  try {
-    final escaped = jsonEncode(text);
-    final script = '''
+
+  Future<void> _highlightInWebPage(String text) async {
+    try {
+      final escaped = jsonEncode(text);
+      final script = '''
 (function(txt){
   if(!txt){return;}
   const cls='flutter-tts-highlight';
@@ -466,11 +464,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   walk(document.body);
 })($escaped);
 ''';
-    await _controller.runJavaScript(script);
-  } catch (_) {
-    // ignore failures silently
+      await _controller.runJavaScript(script);
+    } catch (_) {
+      // ignore failures silently
+    }
   }
-}
+
   Future<void> _reloadReaderHtml({bool showLoading = false}) async {
     if (!_readerOn) return;
     if (showLoading && mounted) {
@@ -488,7 +487,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       setState(() => _isLoading = false);
     }
   }
-
 
   String _buildReaderHtml(List<String> lines, String? heroUrl) {
     final buffer = StringBuffer();
@@ -627,89 +625,87 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
   }
 
-Future<void> _toggleTranslateToSetting() async {
-  final settings = context.read<SettingsProvider>();
-  final code = settings.translateLangCode;
+  Future<void> _toggleTranslateToSetting() async {
+    final settings = context.read<SettingsProvider>();
+    final code = settings.translateLangCode;
 
-  if (code == 'off') {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Translation disabled in Settings.')),
-    );
-    return;
-  }
-
-  await _ensureLinesLoaded();
-  if (_lines.isEmpty) return;
-
-  // already translated -> back to original
-  if (_isTranslatedView) {
-    if (_originalLinesCache != null) {
-      setState(() {
-        _lines
-          ..clear()
-          ..addAll(_originalLinesCache!);
-        _isTranslatedView = false;
-        _currentLine = 0;
-        _webHighlightText = null;
-
-      });
-      await _reloadReaderHtml(showLoading: true);
-      await _applyTtsLocale('en');
-    }
-    return;
-  }
-
-  setState(() => _isTranslating = true);
-
-  final target = _translateLanguageFromCode(code);
-  if (target == null) {
-    setState(() => _isTranslating = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Unsupported target language: $code')),
-    );
-    return;
-  }
-
-  // Detect source language from the article text
-  final src = await _detectSourceLang();
-
-  // ✅ Let OnDeviceTranslator handle model download internally
-  final translator =
-      OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
-
-  _originalLinesCache ??= List<String>.from(_lines);
-  final translated = <String>[];
-
-  for (int i = 0; i < _lines.length; i++) {
-    final line = _lines[i];
-
-    // image marker line (we’re not using this right now, but keep logic)
-    if (line.startsWith('__IMG__|')) {
-      translated.add(line);
-      continue;
+    if (code == 'off') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Translation disabled in Settings.')),
+      );
+      return;
     }
 
-    final t = await translator.translateText(line);
-    translated.add(t);
+    await _ensureLinesLoaded();
+    if (_lines.isEmpty) return;
+
+    // already translated -> back to original
+    if (_isTranslatedView) {
+      if (_originalLinesCache != null) {
+        setState(() {
+          _lines
+            ..clear()
+            ..addAll(_originalLinesCache!);
+          _isTranslatedView = false;
+          _currentLine = 0;
+          _webHighlightText = null;
+        });
+        await _reloadReaderHtml(showLoading: true);
+        await _applyTtsLocale('en');
+      }
+      return;
+    }
+
+    setState(() => _isTranslating = true);
+
+    final target = _translateLanguageFromCode(code);
+    if (target == null) {
+      setState(() => _isTranslating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unsupported target language: $code')),
+      );
+      return;
+    }
+
+    // Detect source language from the article text
+    final src = await _detectSourceLang();
+
+    // ✅ Let OnDeviceTranslator handle model download internally
+    final translator =
+        OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
+
+    _originalLinesCache ??= List<String>.from(_lines);
+    final translated = <String>[];
+
+    for (int i = 0; i < _lines.length; i++) {
+      final line = _lines[i];
+
+      // image marker line (we’re not using this right now, but keep logic)
+      if (line.startsWith('__IMG__|')) {
+        translated.add(line);
+        continue;
+      }
+
+      final t = await translator.translateText(line);
+      translated.add(t);
+    }
+
+    await translator.close();
+
+    if (!mounted) return;
+
+    setState(() {
+      _lines
+        ..clear()
+        ..addAll(translated);
+      _isTranslatedView = true;
+      _isTranslating = false;
+      _currentLine = 0;
+      _webHighlightText = null;
+    });
+    await _reloadReaderHtml(showLoading: true);
+    await _applyTtsLocale(code);
   }
-
-  await translator.close();
-
-  if (!mounted) return;
-
-  setState(() {
-    _lines
-      ..clear()
-      ..addAll(translated);
-    _isTranslatedView = true;
-    _isTranslating = false;
-    _currentLine = 0;
-    _webHighlightText = null;
-  });
-  await _reloadReaderHtml(showLoading: true);
-  await _applyTtsLocale(code);
-}
-
 
   // --------------- TTS playback ---------------
 
@@ -730,7 +726,8 @@ Future<void> _toggleTranslateToSetting() async {
 
     if (result == null || (result.mainText?.trim().isEmpty ?? true)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Unable to extract article text for reading.')),
+        const SnackBar(
+            content: Text('Unable to extract article text for reading.')),
       );
       return;
     }
@@ -788,10 +785,10 @@ Future<void> _toggleTranslateToSetting() async {
     await _highlightLine(_currentLine);
 
     setState(() {
-        _isPlaying = true;
-        _webHighlightText = null;
-      });
-       await _showReadingNotification(text);
+      _isPlaying = true;
+      _webHighlightText = null;
+    });
+    await _showReadingNotification(text);
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -851,10 +848,10 @@ Future<void> _toggleTranslateToSetting() async {
     setState(() => _currentLine = i);
     await _speakCurrentLine();
   }
+
   Future<void> _showReadingNotification(String lineText) async {
-    final title = (widget.title?.isNotEmpty ?? false)
-        ? widget.title!
-        : 'Reading article';
+    final title =
+        (widget.title?.isNotEmpty ?? false) ? widget.title! : 'Reading article';
     final position = '${_currentLine + 1}/${_lines.length}';
     final android = AndroidNotificationDetails(
       'reading_channel',
@@ -889,9 +886,7 @@ Future<void> _toggleTranslateToSetting() async {
     setState(() {
       _readerOn = !_readerOn;
       _isTranslatedView = false;
-      _originalLinesCache = null;
-      _webHighlightText = null;
-       if (_readerOn) {
+      if (_readerOn) {
         _hasInternalPageInHistory = true;
       }
     });
@@ -903,7 +898,6 @@ Future<void> _toggleTranslateToSetting() async {
       // Go back to full website, but KEEP _lines so TTS still works
       await _controller.loadRequest(Uri.parse(widget.url));
     }
-    
   }
 
   @override
@@ -918,7 +912,7 @@ Future<void> _toggleTranslateToSetting() async {
     final settings = context.watch<SettingsProvider>();
     final canTranslate = settings.translateLangCode != 'off';
 
-     return WillPopScope(
+    return WillPopScope(
       onWillPop: _handleBackNavigation,
       child: Scaffold(
         appBar: AppBar(
@@ -932,13 +926,13 @@ Future<void> _toggleTranslateToSetting() async {
               }
             },
           ),
-        actions: [
+          actions: [
             IconButton(
               icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
               onPressed: _toggleReader,
               tooltip: _readerOn ? 'Show original page' : 'Reader mode',
             ),
-        if (canTranslate)
+            if (canTranslate)
               IconButton(
                 icon: (_isLoading || _isTranslating)
                     ? const SizedBox(
@@ -1002,7 +996,7 @@ Future<void> _toggleTranslateToSetting() async {
                   ),
                 ),
               ),
-        ],
+          ],
         ),
         bottomNavigationBar: SafeArea(
           child: Container(
