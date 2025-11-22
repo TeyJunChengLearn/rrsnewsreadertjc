@@ -884,8 +884,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   Future<void> _toggleReader() async {
     setState(() {
+        // If we are leaving translated reader mode, restore original lines so we
+      // don't end up translating already-translated text when returning.
+      if (_isTranslatedView && _originalLinesCache != null) {
+        _lines
+          ..clear()
+          ..addAll(_originalLinesCache!);
+        _isTranslatedView = false;
+        _currentLine = 0;
+        _webHighlightText = null;
+      }
       _readerOn = !_readerOn;
-      _isTranslatedView = false;
       if (_readerOn) {
         _hasInternalPageInHistory = true;
       }
