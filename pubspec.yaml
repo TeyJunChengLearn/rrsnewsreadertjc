@@ -25,7 +25,8 @@ dependencies:
   url_launcher: ^6.3.0
   html: ^0.15.4
   flutter_local_notifications: ^17.1.2
-
+  share_plus: ^10.0.2
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

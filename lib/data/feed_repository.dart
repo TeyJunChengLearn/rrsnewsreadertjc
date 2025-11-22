@@ -102,6 +102,9 @@ class FeedRepository {
     await articleDao.updateBookmark(id, isBookmarked);
   }
 
+  Future<void> hideOlderThan(DateTime cutoff) async {
+    await articleDao.hideOlderThan(cutoff);
+  }
   // ---------------------------------------------------------------------------
   // DB READ (no network)
   // ---------------------------------------------------------------------------

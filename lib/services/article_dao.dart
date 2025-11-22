@@ -7,7 +7,7 @@ class ArticleDao {
   final DatabaseService _dbService;
   ArticleDao(this._dbService);
 
-Future<List<FeedItem>> getAllArticles() async {
+  Future<List<FeedItem>> getAllArticles() async {
     final db = await _dbService.database;
     final rows = await db.query(
       'articles',
@@ -16,7 +16,6 @@ Future<List<FeedItem>> getAllArticles() async {
     );
     return rows.map(FeedItem.fromMap).toList();
   }
-
 
   Future<void> upsertArticles(List<FeedItem> items) async {
     final db = await _dbService.database;
@@ -62,7 +61,7 @@ Future<List<FeedItem>> getAllArticles() async {
             : 0;
     await db.update(
       'articles',
-       {'isRead': clamped},
+      {'isRead': clamped},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -77,7 +76,9 @@ Future<List<FeedItem>> getAllArticles() async {
       whereArgs: [id],
     );
   }
-  Future<void> updateContent(String id, String? mainText, String? imageUrl) async {
+
+  Future<void> updateContent(
+      String id, String? mainText, String? imageUrl) async {
     final db = await _dbService.database;
     final updates = <String, Object?>{};
     if (mainText != null) updates['mainText'] = mainText;
@@ -115,6 +116,17 @@ Future<List<FeedItem>> getAllArticles() async {
     ''', [sourceTitle, sourceTitle, keepCount]);
 
     return deleted;
+  }
+
+  Future<int> hideOlderThan(DateTime cutoff) async {
+    final db = await _dbService.database;
+    final cutoffMillis = cutoff.millisecondsSinceEpoch;
+    return db.update(
+      'articles',
+      {'isRead': 2},
+      where: 'COALESCE(pubDateMillis, 0) < ?',
+      whereArgs: [cutoffMillis],
+    );
   }
 
   Future<int> hideAllRead() async {

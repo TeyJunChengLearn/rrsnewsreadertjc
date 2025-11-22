@@ -229,6 +229,26 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
 
     await repo.setRead(item.id, read);
   }
+  Future<void> hideOlderThan(FeedItem item) async {
+    final cutoff = item.pubDate;
+    if (cutoff == null) return;
+
+    _loading = true;
+    notifyListeners();
+
+    try {
+      await repo.hideOlderThan(cutoff);
+      final merged = await repo.readAllFromDb();
+      _items
+        ..clear()
+        ..addAll(merged);
+    } catch (e) {
+      _error = '$e';
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
+  }
 bool _backfillInProgress = false;
   Future<void> backfillArticleContent() async {
     if (_backfillInProgress) return;

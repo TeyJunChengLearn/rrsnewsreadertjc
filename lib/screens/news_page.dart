@@ -1,6 +1,7 @@
 // lib/screens/news_page.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/feed_item.dart';
 import '../providers/rss_provider.dart';
@@ -501,6 +502,7 @@ class _ArticleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final rss = context.read<RssProvider>();
     final ago = rss.niceTimeAgo(item.pubDate);
+    final agoLabel = ago.isNotEmpty ? ago : 'this article';
     final isBookmarked = item.isBookmarked;
     final bool isReadLike = item.isRead >= 1; // 1 and 2 both count as "read"
     final bool hasMainArticle = (item.mainText ?? '').isNotEmpty;
@@ -597,8 +599,67 @@ class _ArticleRow extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
+                        icon: Icon(Icons.share, size: 20, color: item.isRead==1 ? Colors.grey.shade600 : null),
+                        onPressed: () {
+                          final shareText = '${item.title}\n${item.link ?? ''}'.trim();
+                          Share.share(shareText);
+                        },
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
                         icon: Icon(Icons.more_vert, size: 20, color: item.isRead==1 ? Colors.grey.shade600 : null),
-                        onPressed: () {},
+                         onPressed: () {
+                          showModalBottomSheet(
+                            context: context,
+                            showDragHandle: true,
+                            builder: (ctx) {
+                              return SafeArea(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      ListTile(
+                                        leading: const Icon(Icons.share),
+                                        title: const Text('Share this article'),
+                                        subtitle: Text(item.sourceTitle),
+                                        onTap: () {
+                                          Navigator.of(ctx).pop();
+                                          final shareText = '${item.title}\n${item.link ?? ''}'.trim();
+                                          Share.share(shareText);
+                                        },
+                                      ),
+                                      ListTile(
+                                        leading: const Icon(Icons.visibility_off),
+                                        title: const Text('Hide news before this time'),
+                                        subtitle: Text('Mark older items as hidden so they disappear from the list.'),
+                                        onTap: () async {
+                                          Navigator.of(ctx).pop();
+                                          if (item.pubDate == null) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('This article has no timestamp to use.')),
+                                            );
+                                            return;
+                                          }
+                                          await rss.hideOlderThan(item);
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('Hidden news older than $agoLabel.')),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },,
                       ),
                     ],
                   ),
