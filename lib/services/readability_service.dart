@@ -307,22 +307,31 @@ String? _extractPageTitle(dom.Document doc) {
       return null;
     }
 
-    // 1) OpenGraph
+// 1) <figure> images inside the article
+    // These are the most likely to be the main content images.
+    final figureImgs = articleRoot.querySelectorAll('figure img');
+    final resolvedFigure = pickCandidate(figureImgs);
+    if (resolvedFigure != null) return resolvedFigure;
+
+    // 2) Any inline image inside the article
+    final inlineImgs = articleRoot.querySelectorAll('img');
+    final resolvedInline = pickCandidate(inlineImgs);
+    if (resolvedInline != null) return resolvedInline;
+
+    // 3) Metadata-defined hero (Open Graph / Twitter)
     final ogImage =
         doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     final resolvedOg = resolve(ogImage);
     if (resolvedOg != null && !looksLikeJunk(resolvedOg)) {
       return resolvedOg;
     }
-
-    // 2) <figure> images inside the article
-    final figureImgs = articleRoot.querySelectorAll('figure img');
-    final resolvedFigure = pickCandidate(figureImgs);
-    if (resolvedFigure != null) return resolvedFigure;
-
-    // 3) Any inline image inside the article
-    final inlineImgs = articleRoot.querySelectorAll('img');
-    return pickCandidate(inlineImgs);
+    final twitterImage =
+        doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+    final resolvedTwitter = resolve(twitterImage);
+    if (resolvedTwitter != null && !looksLikeJunk(resolvedTwitter)) {
+      return resolvedTwitter;
+    }
+     return null;
   }
 
   // ---------------------------------------------------------------------------
