@@ -253,7 +253,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     if (_readerOn) {
       setState(() {
         _readerOn = false;
-        _isTranslatedView = false;
         _hasInternalPageInHistory = true;
       });
 
@@ -368,8 +367,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   Future<void> _loadReaderContent() async {
     setState(() {
       _isLoading = true;
-      _isTranslatedView = false;
-      _originalLinesCache = null;
     });
 
     await _ensureLinesLoaded();
@@ -884,16 +881,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   Future<void> _toggleReader() async {
     setState(() {
-        // If we are leaving translated reader mode, restore original lines so we
-      // don't end up translating already-translated text when returning.
-      if (_isTranslatedView && _originalLinesCache != null) {
-        _lines
-          ..clear()
-          ..addAll(_originalLinesCache!);
-        _isTranslatedView = false;
-        _currentLine = 0;
-        _webHighlightText = null;
-      }
       _readerOn = !_readerOn;
       if (_readerOn) {
         _hasInternalPageInHistory = true;
