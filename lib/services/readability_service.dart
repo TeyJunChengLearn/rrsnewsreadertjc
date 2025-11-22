@@ -7,7 +7,8 @@ class ArticleReadabilityResult {
   final String? mainText;
   final String? imageUrl;
   final String? pageTitle;
-  const ArticleReadabilityResult({this.mainText, this.imageUrl, this.pageTitle});
+  const ArticleReadabilityResult(
+      {this.mainText, this.imageUrl, this.pageTitle});
 
   bool get hasContent =>
       (mainText != null && mainText!.isNotEmpty) ||
@@ -31,7 +32,8 @@ class ArticleReadabilityResult {
 class Readability4JExtended {
   final http.Client _client;
 
-  Readability4JExtended({http.Client? client}) : _client = client ?? http.Client();
+  Readability4JExtended({http.Client? client})
+      : _client = client ?? http.Client();
 
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
@@ -40,7 +42,7 @@ class Readability4JExtended {
         headers: const {
           'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml',
         },
       );
@@ -52,16 +54,15 @@ class Readability4JExtended {
       _stripNoise(doc);
 
       final title = _extractPageTitle(doc);
+      final articleRoot = _findArticleRoot(doc);
 
-
-       String? normalized;
+      String? normalized;
       if (articleRoot != null) {
         final text = _extractMainText(articleRoot);
         normalized = _normalizeWhitespace(text);
       }
 
-            normalized ??= _fallbackBodyText(doc);
-
+      normalized ??= _fallbackBodyText(doc);
 
       if (normalized == null || normalized.isEmpty) {
         return null;
@@ -99,7 +100,10 @@ class Readability4JExtended {
     final candidates = doc.querySelectorAll('*').toList();
     for (final el in candidates) {
       final tag = el.localName ?? '';
-      if (tag == 'header' || tag == 'footer' || tag == 'nav' || tag == 'aside') {
+      if (tag == 'header' ||
+          tag == 'footer' ||
+          tag == 'nav' ||
+          tag == 'aside') {
         el.remove();
         continue;
       }
@@ -136,18 +140,21 @@ class Readability4JExtended {
         el.remove();
       }
     }
-    
   }
-String? _extractPageTitle(dom.Document doc) {
+
+  String? _extractPageTitle(dom.Document doc) {
     // Prefer Open Graph/Twitter title if available
-    final og = doc.querySelector('meta[property="og:title"]')?.attributes['content'];
+    final og =
+        doc.querySelector('meta[property="og:title"]')?.attributes['content'];
     if (og != null && og.trim().isNotEmpty) return og.trim();
 
-    final twitter = doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
+    final twitter =
+        doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
     if (twitter != null && twitter.trim().isNotEmpty) return twitter.trim();
 
     final plainTitle = doc.querySelector('title')?.text;
-    if (plainTitle != null && plainTitle.trim().isNotEmpty) return plainTitle.trim();
+    if (plainTitle != null && plainTitle.trim().isNotEmpty)
+      return plainTitle.trim();
 
     return null;
   }
@@ -331,7 +338,7 @@ String? _extractPageTitle(dom.Document doc) {
     if (resolvedTwitter != null && !looksLikeJunk(resolvedTwitter)) {
       return resolvedTwitter;
     }
-     return null;
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -346,7 +353,8 @@ String? _extractPageTitle(dom.Document doc) {
         .toList();
     return lines.join('\n\n');
   }
-   String? _fallbackBodyText(dom.Document doc) {
+
+  String? _fallbackBodyText(dom.Document doc) {
     final bodyText = doc.body?.text ?? '';
     final normalized = _normalizeWhitespace(bodyText);
     // Avoid returning extremely short or obviously empty content.
