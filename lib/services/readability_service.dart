@@ -54,21 +54,21 @@ class Readability4JExtended {
       final title = _extractPageTitle(doc);
 
 
-      final dom.Element? articleRoot = _findArticleRoot(doc);
+       String? normalized;
+      if (articleRoot != null) {
+        final text = _extractMainText(articleRoot);
+        normalized = _normalizeWhitespace(text);
+      }
 
-      if (articleRoot == null) {
-        // No container looks like a real article.
+            normalized ??= _fallbackBodyText(doc);
+
+
+      if (normalized == null || normalized.isEmpty) {
         return null;
       }
 
-      final text = _extractMainText(articleRoot);
-      final normalized = _normalizeWhitespace(text);
-
-      if (normalized.isEmpty) {
-        return null;
-      }
-
-      final heroImage = _extractLeadImage(doc, articleRoot, url);
+      final heroImage =
+          articleRoot != null ? _extractLeadImage(doc, articleRoot, url) : null;
 
       final result = ArticleReadabilityResult(
         mainText: normalized,
@@ -345,5 +345,11 @@ String? _extractPageTitle(dom.Document doc) {
         .where((line) => line.isNotEmpty)
         .toList();
     return lines.join('\n\n');
+  }
+   String? _fallbackBodyText(dom.Document doc) {
+    final bodyText = doc.body?.text ?? '';
+    final normalized = _normalizeWhitespace(bodyText);
+    // Avoid returning extremely short or obviously empty content.
+    return normalized.length < 120 ? null : normalized;
   }
 }

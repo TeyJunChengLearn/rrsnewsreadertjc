@@ -519,6 +519,29 @@ class _ArticleRow extends StatelessWidget {
     final thumbUrl = item.imageUrl ?? '';
     final url = item.link; // if your model uses String?, make it `item.link ?? ''`
     final Color accentRing = hasMainArticle ? Colors.green : Colors.grey.shade400;
+    Widget _greyscaleIfMissingContent(Widget child) {
+      if (hasMainArticle) return child;
+      // Desaturate thumbnail when Readability could not fetch content
+      return ColorFiltered(
+        colorFilter: const ColorFilter.matrix(<double>[
+          0.2126, 0.7152, 0.0722, 0, 0,
+          0.2126, 0.7152, 0.0722, 0, 0,
+          0.2126, 0.7152, 0.0722, 0, 0,
+          0, 0, 0, 1, 0,
+        ]),
+        child: Opacity(opacity: 0.8, child: child),
+      );
+    }
+
+    final Widget thumb = _greyscaleIfMissingContent(
+      thumbUrl.isNotEmpty
+          ? Image.network(thumbUrl, fit: BoxFit.cover)
+          : Container(
+              color: Colors.grey.shade300,
+              alignment: Alignment.center,
+              child: const Icon(Icons.image_not_supported),
+            ),
+    );
     return InkWell(
       onTap: () {
         rss.markRead(item);
@@ -595,13 +618,7 @@ class _ArticleRow extends StatelessWidget {
                 ),
                 padding: const EdgeInsets.all(4),
                 child: ClipOval(
-                  child: thumbUrl.isNotEmpty
-                      ? Image.network(thumbUrl, fit: BoxFit.cover)
-                      : Container(
-                          color: Colors.grey.shade300,
-                          alignment: Alignment.center,
-                          child: const Icon(Icons.image_not_supported),
-                        ),
+                 child: thumb,
                 ),),
             ),
           ],
