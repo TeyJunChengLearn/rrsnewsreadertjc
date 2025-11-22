@@ -17,19 +17,21 @@ class ArticleContentService {
 
     for (final item in items) {
       if (item.link.isEmpty) continue;
-      final needsText = (item.mainText ?? '').isEmpty;
-      final needsImage = (item.imageUrl ?? '').isEmpty;
+      final needsText = (item.mainText ?? '').trim().isEmpty;
+      final needsImage = (item.imageUrl ?? '').trim().isEmpty;
       if (!needsText && !needsImage) continue;
 
       final content = await readability.extractMainContent(item.link);
       if (content == null) continue;
 
       final updates = <String, String?>{};
-      if (needsText && (content.mainText ?? '').isNotEmpty) {
-        updates['mainText'] = content.mainText;
+      final trimmedText = content.mainText?.trim();
+      if (needsText && (trimmedText ?? '').isNotEmpty) {
+        updates['mainText'] = trimmedText;
       }
-      if (needsImage && (content.imageUrl ?? '').isNotEmpty) {
-        updates['imageUrl'] = content.imageUrl;
+      final leadImage = content.imageUrl?.trim();
+      if (needsImage && (leadImage ?? '').isNotEmpty) {
+        updates['imageUrl'] = leadImage;
       }
 
       if (updates.isEmpty) continue;
