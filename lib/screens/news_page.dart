@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/feed_item.dart';
 import '../providers/rss_provider.dart';
@@ -14,7 +15,9 @@ import 'settings_page.dart';
 
 // Local-only filter state (does NOT modify provider)
 enum _LocalReadFilter { all, unreadOnly, readOnly }
+
 enum _LocalBookmarkFilter { all, bookmarkedOnly }
+
 enum _LocalSortOrder { latestFirst, oldestFirst }
 
 class NewsPage extends StatefulWidget {
@@ -26,9 +29,11 @@ class NewsPage extends StatefulWidget {
 class _NewsPageState extends State<NewsPage> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-@override
+  static const _kSortOrderKey = 'news_sort_order';
+  @override
   void initState() {
     super.initState();
+    _loadSavedSortOrder();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<RssProvider>().backfillArticleContent();
@@ -46,6 +51,26 @@ class _NewsPageState extends State<NewsPage> {
       _sortOrder != _LocalSortOrder.latestFirst;
 
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
+
+  Future<void> _loadSavedSortOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_kSortOrderKey);
+    if (!mounted || saved == null) return;
+
+    setState(() {
+      _sortOrder = saved == 'oldest'
+          ? _LocalSortOrder.oldestFirst
+          : _LocalSortOrder.latestFirst;
+    });
+  }
+
+  Future<void> _persistSortOrder(_LocalSortOrder order) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kSortOrderKey,
+      order == _LocalSortOrder.latestFirst ? 'latest' : 'oldest',
+    );
+  }
 
   Future<void> _openFilterSheet(BuildContext context) async {
     final result = await showModalBottomSheet<_FilterResult>(
@@ -67,6 +92,8 @@ class _NewsPageState extends State<NewsPage> {
         _bmFilter = result.bm;
         _sortOrder = result.sort;
       });
+
+      _persistSortOrder(result.sort);
     }
   }
 
@@ -76,7 +103,7 @@ class _NewsPageState extends State<NewsPage> {
     );
   }
 
- // 0 = unread, 1 = read, 2 = hidden
+  // 0 = unread, 1 = read, 2 = hidden
 
   // Otherwise use isRead directly (we store 0/1/2 there)
   int _rcOf(FeedItem it) {
@@ -88,17 +115,15 @@ class _NewsPageState extends State<NewsPage> {
     } catch (_) {
       // ignore and fall through
     }
-     final v = it.isRead;
+    final v = it.isRead;
     if (v == 0 || v == 1 || v == 2) return v;
 
     // Safety fallback for weird values
     return v == 1 ? 1 : 0;
   }
 
-
-
   List<FeedItem> _buildAllFeeds(RssProvider rss) {
-  List<FeedItem> list = List<FeedItem>.from(rss.allItems);
+    List<FeedItem> list = List<FeedItem>.from(rss.allItems);
     final bool bookmarkedOnly =
         _bmFilter == _LocalBookmarkFilter.bookmarkedOnly;
     final bool unreadOnly = _readFilter == _LocalReadFilter.unreadOnly;
@@ -108,29 +133,28 @@ class _NewsPageState extends State<NewsPage> {
       list.removeWhere((it) => _rcOf(it) == 2);
     }
 
-
-   // 2) Bookmark filter
+    // 2) Bookmark filter
     if (bookmarkedOnly) {
       list.retainWhere((e) => e.isBookmarked);
     }
 
-  // 3) Read filter
- if (unreadOnly) {
+    // 3) Read filter
+    if (unreadOnly) {
       list.retainWhere((e) => _rcOf(e) == 0);
     } else if (readOnly) {
       list.retainWhere((e) => _rcOf(e) >= 1); // includes hidden (2)
     }
 
-  // 4) Sort
+    // 4) Sort
     int t(FeedItem x) => x.pubDate?.millisecondsSinceEpoch ?? 0;
     list.sort(
       (a, b) => _sortOrder == _LocalSortOrder.latestFirst
-      ? t(b).compareTo(t(a)): t(a).compareTo(t(b)),
+          ? t(b).compareTo(t(a))
+          : t(a).compareTo(t(b)),
     );
 
     return list;
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -140,18 +164,22 @@ class _NewsPageState extends State<NewsPage> {
     return Scaffold(
       key: _scaffoldKey,
       drawer: const _NewsDrawer(),
-
       appBar: AppBar(
         titleSpacing: 0,
-        leading: IconButton(icon: const Icon(Icons.menu), onPressed: _openDrawer),
-        title: const Text('News', style: TextStyle(fontWeight: FontWeight.w600)),
+        leading:
+            IconButton(icon: const Icon(Icons.menu), onPressed: _openDrawer),
+        title:
+            const Text('News', style: TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: true,
         actions: [
-          IconButton(icon: const Icon(Icons.tune), onPressed: () => _openFilterSheet(context)),
-          IconButton(icon: const Icon(Icons.search), onPressed: () => _openSearch(context)),
+          IconButton(
+              icon: const Icon(Icons.tune),
+              onPressed: () => _openFilterSheet(context)),
+          IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () => _openSearch(context)),
         ],
       ),
-
       body: RefreshIndicator(
         onRefresh: rss.refresh,
         child: ListView(
@@ -162,16 +190,23 @@ class _NewsPageState extends State<NewsPage> {
               children: [
                 Text(
                   _hasActiveFilter ? 'All feeds (filtered)' : 'All feeds',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600),
+                  style: Theme.of(context)
+                      .textTheme
+                      .headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.w600),
                 ),
                 const Spacer(),
                 if (_hasActiveFilter)
                   TextButton.icon(
-                    onPressed: () => setState(() {
-                      _readFilter = _LocalReadFilter.all;
-                      _bmFilter = _LocalBookmarkFilter.all;
-                      _sortOrder = _LocalSortOrder.latestFirst;
-                    }),
+                    onPressed: () {
+                      setState(() {
+                        _readFilter = _LocalReadFilter.all;
+                        _bmFilter = _LocalBookmarkFilter.all;
+                        _sortOrder = _LocalSortOrder.latestFirst;
+                      });
+
+                      _persistSortOrder(_LocalSortOrder.latestFirst);
+                    },
                     icon: const Icon(Icons.clear),
                     label: const Text('Clear'),
                   ),
@@ -183,7 +218,8 @@ class _NewsPageState extends State<NewsPage> {
 
             if (rss.error != null) ...[
               const SizedBox(height: 8),
-              Text('Error: ${rss.error}', style: const TextStyle(color: Colors.red)),
+              Text('Error: ${rss.error}',
+                  style: const TextStyle(color: Colors.red)),
             ],
 
             if (rss.loading && allFeeds.isEmpty) ...const [
@@ -197,7 +233,6 @@ class _NewsPageState extends State<NewsPage> {
           ],
         ),
       ),
-
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.read<RssProvider>().hideReadNow(),
         backgroundColor: Theme.of(context).colorScheme.primary,
@@ -294,10 +329,13 @@ class _FilterSheetState extends State<_FilterSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Read filter
-            const Text('Read filter', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+            const Text('Read filter',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
             const SizedBox(height: 12),
             Wrap(
-              spacing: 12, runSpacing: 12, children: [
+              spacing: 12,
+              runSpacing: 12,
+              children: [
                 _choice(
                   label: 'All',
                   selected: _read == _LocalReadFilter.all,
@@ -306,12 +344,14 @@ class _FilterSheetState extends State<_FilterSheet> {
                 _choice(
                   label: 'Unread only',
                   selected: _read == _LocalReadFilter.unreadOnly,
-                  onTap: () => setState(() => _read = _LocalReadFilter.unreadOnly),
+                  onTap: () =>
+                      setState(() => _read = _LocalReadFilter.unreadOnly),
                 ),
                 _choice(
                   label: 'Read only',
                   selected: _read == _LocalReadFilter.readOnly,
-                  onTap: () => setState(() => _read = _LocalReadFilter.readOnly),
+                  onTap: () =>
+                      setState(() => _read = _LocalReadFilter.readOnly),
                 ),
               ],
             ),
@@ -319,10 +359,13 @@ class _FilterSheetState extends State<_FilterSheet> {
             const SizedBox(height: 20),
 
             // Bookmark filter
-            const Text('Bookmark filter', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+            const Text('Bookmark filter',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
             const SizedBox(height: 12),
             Wrap(
-              spacing: 12, runSpacing: 12, children: [
+              spacing: 12,
+              runSpacing: 12,
+              children: [
                 _choice(
                   label: 'All',
                   selected: _bm == _LocalBookmarkFilter.all,
@@ -331,7 +374,8 @@ class _FilterSheetState extends State<_FilterSheet> {
                 _choice(
                   label: 'Bookmarked only',
                   selected: _bm == _LocalBookmarkFilter.bookmarkedOnly,
-                  onTap: () => setState(() => _bm = _LocalBookmarkFilter.bookmarkedOnly),
+                  onTap: () =>
+                      setState(() => _bm = _LocalBookmarkFilter.bookmarkedOnly),
                 ),
               ],
             ),
@@ -339,19 +383,24 @@ class _FilterSheetState extends State<_FilterSheet> {
             const SizedBox(height: 20),
 
             // Sort
-            const Text('Sort by', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+            const Text('Sort by',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
             const SizedBox(height: 12),
             Wrap(
-              spacing: 12, runSpacing: 12, children: [
+              spacing: 12,
+              runSpacing: 12,
+              children: [
                 _choice(
                   label: 'Latest first',
                   selected: _sort == _LocalSortOrder.latestFirst,
-                  onTap: () => setState(() => _sort = _LocalSortOrder.latestFirst),
+                  onTap: () =>
+                      setState(() => _sort = _LocalSortOrder.latestFirst),
                 ),
                 _choice(
                   label: 'Oldest first',
                   selected: _sort == _LocalSortOrder.oldestFirst,
-                  onTap: () => setState(() => _sort = _LocalSortOrder.oldestFirst),
+                  onTap: () =>
+                      setState(() => _sort = _LocalSortOrder.oldestFirst),
                 ),
               ],
             ),
@@ -361,7 +410,8 @@ class _FilterSheetState extends State<_FilterSheet> {
             Row(
               children: [
                 TextButton.icon(
-                  onPressed: () => Navigator.pop(context, _FilterResult(_read, _bm, _sort)),
+                  onPressed: () =>
+                      Navigator.pop(context, _FilterResult(_read, _bm, _sort)),
                   icon: const Icon(Icons.check),
                   label: const Text('Apply'),
                 ),
@@ -411,7 +461,9 @@ class _NewsDrawer extends StatelessWidget {
                 children: [
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    child: Text('Feed', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                    child: Text('Feed',
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w600)),
                   ),
                   ListTile(
                     leading: const Icon(Icons.folder_copy_outlined),
@@ -423,7 +475,8 @@ class _NewsDrawer extends StatelessWidget {
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                       child: Text(
                         source.title,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500),
                       ),
                     ),
                   const SizedBox(height: 8),
@@ -432,7 +485,8 @@ class _NewsDrawer extends StatelessWidget {
                     title: const Text('Add more feed'),
                     onTap: () {
                       Navigator.of(context).pop();
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const FeedPage()));
+                      Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const FeedPage()));
                     },
                   ),
                   const Divider(height: 24, thickness: 1),
@@ -441,27 +495,36 @@ class _NewsDrawer extends StatelessWidget {
                     title: const Text('Settings'),
                     onTap: () {
                       Navigator.of(context).pop();
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const SettingsPage()));
                     },
                   ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(
                       children: [
                         const Icon(Icons.dark_mode),
                         const SizedBox(width: 16),
-                        const Expanded(child: Text('Dark theme', style: TextStyle(fontSize: 16))),
+                        const Expanded(
+                            child: Text('Dark theme',
+                                style: TextStyle(fontSize: 16))),
                         // Non-deprecated APIs
                         Switch(
                           value: settings.darkTheme,
                           thumbColor: WidgetStateProperty.resolveWith<Color?>(
-                            (states) => states.contains(WidgetState.selected) ? accent : null,
+                            (states) => states.contains(WidgetState.selected)
+                                ? accent
+                                : null,
                           ),
                           trackColor: WidgetStateProperty.resolveWith<Color?>(
-                            (states) =>
-                                states.contains(WidgetState.selected) ? accent.withValues(alpha: 0.35) : null,
+                            (states) => states.contains(WidgetState.selected)
+                                ? accent.withValues(alpha: 0.35)
+                                : null,
                           ),
-                          onChanged: (v) => context.read<SettingsProvider>().toggleDarkTheme(v),
+                          onChanged: (v) => context
+                              .read<SettingsProvider>()
+                              .toggleDarkTheme(v),
                         ),
                       ],
                     ),
@@ -488,8 +551,10 @@ class _UnreadChip extends StatelessWidget {
     final bg = Colors.grey.shade300;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-      child: Text('$count unread', style: TextStyle(fontSize: 13, color: textColor)),
+      decoration:
+          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
+      child: Text('$count unread',
+          style: TextStyle(fontSize: 13, color: textColor)),
     );
   }
 }
@@ -516,20 +581,39 @@ class _ArticleRow extends StatelessWidget {
       height: 1.3,
     );
 
-    final Color metaColor = item.isRead==1 ? Colors.grey.shade500 : Colors.grey.shade700;
+    final Color metaColor =
+        item.isRead == 1 ? Colors.grey.shade500 : Colors.grey.shade700;
 
     final thumbUrl = item.imageUrl ?? '';
-    final url = item.link; // if your model uses String?, make it `item.link ?? ''`
-    final Color accentRing = hasMainArticle ? Colors.green : Colors.grey.shade400;
+    final url =
+        item.link; // if your model uses String?, make it `item.link ?? ''`
+    final Color accentRing =
+        hasMainArticle ? Colors.green : Colors.grey.shade400;
     Widget _greyscaleIfMissingContent(Widget child) {
       if (hasMainArticle) return child;
       // Desaturate thumbnail when Readability could not fetch content
       return ColorFiltered(
         colorFilter: const ColorFilter.matrix(<double>[
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0, 0, 0, 1, 0,
+          0.2126,
+          0.7152,
+          0.0722,
+          0,
+          0,
+          0.2126,
+          0.7152,
+          0.0722,
+          0,
+          0,
+          0.2126,
+          0.7152,
+          0.0722,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
         ]),
         child: Opacity(opacity: 0.8, child: child),
       );
@@ -548,11 +632,11 @@ class _ArticleRow extends StatelessWidget {
       onTap: () {
         rss.markRead(item);
         if (url.isEmpty) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('No article URL available.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('No article URL available.')));
           return;
         }
-         Navigator.of(context).push(
+        Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ArticleWebviewPage(
               url: url,
@@ -573,12 +657,18 @@ class _ArticleRow extends StatelessWidget {
                 children: [
                   Text(
                     item.sourceTitle,
-                    style: TextStyle(color: metaColor, fontSize: 14, fontWeight: FontWeight.w500, height: 1.4),
+                    style: TextStyle(
+                        color: metaColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1.4),
                   ),
                   const SizedBox(height: 6),
                   Text(item.title, style: titleStyle),
                   const SizedBox(height: 8),
-                  Text(ago, style: TextStyle(fontSize: 14, color: metaColor, height: 1.4)),
+                  Text(ago,
+                      style: TextStyle(
+                          fontSize: 14, color: metaColor, height: 1.4)),
                   const SizedBox(height: 12),
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -590,7 +680,7 @@ class _ArticleRow extends StatelessWidget {
                         icon: Icon(
                           isBookmarked ? Icons.bookmark : Icons.bookmark_border,
                           size: 20,
-                          color: item.isRead==1 ? Colors.grey.shade600 : null,
+                          color: item.isRead == 1 ? Colors.grey.shade600 : null,
                         ),
                         onPressed: () => rss.toggleBookmark(item),
                       ),
@@ -599,9 +689,13 @@ class _ArticleRow extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        icon: Icon(Icons.share, size: 20, color: item.isRead==1 ? Colors.grey.shade600 : null),
+                        icon: Icon(Icons.share,
+                            size: 20,
+                            color:
+                                item.isRead == 1 ? Colors.grey.shade600 : null),
                         onPressed: () {
-                          final shareText = '${item.title}\n${item.link ?? ''}'.trim();
+                          final shareText =
+                              '${item.title}\n${item.link ?? ''}'.trim();
                           Share.share(shareText);
                         },
                       ),
@@ -610,18 +704,23 @@ class _ArticleRow extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),
-                        icon: Icon(Icons.more_vert, size: 20, color: item.isRead==1 ? Colors.grey.shade600 : null),
-                         onPressed: () {
+                        icon: Icon(Icons.more_vert,
+                            size: 20,
+                            color:
+                                item.isRead == 1 ? Colors.grey.shade600 : null),
+                        onPressed: () {
                           showModalBottomSheet(
                             context: context,
                             showDragHandle: true,
                             builder: (ctx) {
                               return SafeArea(
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 8),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       ListTile(
                                         leading: const Icon(Icons.share),
@@ -629,26 +728,37 @@ class _ArticleRow extends StatelessWidget {
                                         subtitle: Text(item.sourceTitle),
                                         onTap: () {
                                           Navigator.of(ctx).pop();
-                                          final shareText = '${item.title}\n${item.link ?? ''}'.trim();
+                                          final shareText =
+                                              '${item.title}\n${item.link ?? ''}'
+                                                  .trim();
                                           Share.share(shareText);
                                         },
                                       ),
                                       ListTile(
-                                        leading: const Icon(Icons.visibility_off),
-                                        title: const Text('Hide news before this time'),
-                                        subtitle: Text('Mark older items as hidden so they disappear from the list.'),
+                                        leading:
+                                            const Icon(Icons.visibility_off),
+                                        title: const Text(
+                                            'Hide news before this time'),
+                                        subtitle: Text(
+                                            'Mark older items as hidden so they disappear from the list.'),
                                         onTap: () async {
                                           Navigator.of(ctx).pop();
                                           if (item.pubDate == null) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              const SnackBar(content: Text('This article has no timestamp to use.')),
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                  content: Text(
+                                                      'This article has no timestamp to use.')),
                                             );
                                             return;
                                           }
                                           await rss.hideOlderThan(item);
                                           if (context.mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(content: Text('Hidden news older than $agoLabel.')),
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                  content: Text(
+                                                      'Hidden news older than $agoLabel.')),
                                             );
                                           }
                                         },
@@ -659,7 +769,7 @@ class _ArticleRow extends StatelessWidget {
                               );
                             },
                           );
-                        },,
+                        },
                       ),
                     ],
                   ),
@@ -679,8 +789,9 @@ class _ArticleRow extends StatelessWidget {
                 ),
                 padding: const EdgeInsets.all(4),
                 child: ClipOval(
-                 child: thumb,
-                ),),
+                  child: thumb,
+                ),
+              ),
             ),
           ],
         ),
