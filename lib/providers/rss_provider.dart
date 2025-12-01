@@ -1,4 +1,5 @@
 // lib/providers/rss_provider.dart
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -148,7 +149,8 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
-              await backfillArticleContent();
+
+      _scheduleBackgroundBackfill();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -181,7 +183,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
-         await backfillArticleContent();
+_scheduleBackgroundBackfill();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -250,6 +252,9 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
     }
   }
 bool _backfillInProgress = false;
+ void _scheduleBackgroundBackfill() {
+    unawaited(Future.microtask(backfillArticleContent));
+  }
   Future<void> backfillArticleContent() async {
     if (_backfillInProgress) return;
     _backfillInProgress = true;
