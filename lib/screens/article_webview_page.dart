@@ -224,7 +224,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   bool _isLoading = true;
   bool _readerOn = false;
-
+  bool _paywallLikely = false;
   // Reader content (one line per highlightable/speakable chunk)
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
@@ -550,7 +550,33 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     buffer.writeln('</div></body></html>');
     return buffer.toString();
   }
+  bool _isLikelyPreviewText(String text, bool pagePaywalled) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
 
+    final lower = trimmed.toLowerCase();
+    final wordCount =
+        trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+
+    final previewMarkers = [
+      'continue reading',
+      'read more',
+      'subscribe to read',
+      'to continue reading',
+      'log in to read',
+      'sign in to continue',
+      'unlock full article',
+    ];
+
+    final hasMarkers = previewMarkers.any(lower.contains);
+    final trailingEllipsis = RegExp(r'(\.\.\.|…)$').hasMatch(trimmed);
+
+    if (hasMarkers || trailingEllipsis) return true;
+
+    if (pagePaywalled && wordCount < 180) return true;
+
+    return false;
+  }
   // --------------- Translation helpers ---------------
 
   TranslateLanguage? _translateLanguageFromCode(String code) {
@@ -740,15 +766,27 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     if (!mounted) return;
 
-    if (result == null || (result.mainText?.trim().isEmpty ?? true)) {
+    final hasNoText = result == null || (result.mainText?.trim().isEmpty ?? true);
+    final pagePaywalled = result?.isPaywalled ?? false;
+    _paywallLikely = pagePaywalled && hasNoText;
+
+    if (hasNoText) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Unable to extract article text for reading.')),
+        SnackBar(
+          content: Text(
+            _paywallLikely
+                ? 'This article looks paywalled. Sign in on the site (via Add feed → "Requires login") then reload.'
+                : 'Unable to extract article text for reading.',
+          ),
+          duration: const Duration(seconds: 5),
+        ),
       );
+      setState(() {});
       return;
     }
 
     final text = (result.mainText ?? '').trim();
+    final previewOnly = _isLikelyPreviewText(text, pagePaywalled);
     final rawLines = text.isEmpty
         ? <String>[]
         : text
@@ -771,6 +809,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     _heroImageUrl ??= result.imageUrl;
 
     setState(() {
+      _paywallLikely = pagePaywalled || previewOnly;
       _lines
         ..clear()
         ..addAll(combined);
@@ -1010,6 +1049,38 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              if (_paywallLikely)
+              Positioned(
+                top: 16,
+                left: 12,
+                right: 12,
+                child: SafeArea(
+                  child: Material(
+                    elevation: 6,
+                    borderRadius: BorderRadius.circular(12),
+                    color: Colors.orange.shade50.withOpacity(0.95),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.lock, color: Colors.orange),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Reader view only has a short preview. Sign in on the site (Add feed → "Requires login") '
+                              'so your cookies can unlock the full article, then reload or open the original page.',
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),

@@ -1,6 +1,7 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'providers/settings_provider.dart';
 import 'providers/rss_provider.dart';
@@ -51,7 +52,23 @@ class AppBootstrap extends StatelessWidget {
           update: (_, db, __) => FeedSourceDao(db),
         ),
         Provider<Readability4JExtended>(
-          create: (_) => Readability4JExtended(),
+          create: (_) {
+            final cookieManager = WebViewCookieManager();
+            return Readability4JExtended(
+              // Reuse in-app login cookies when pulling reader content
+              cookieHeaderBuilder: (url) async {
+                try {
+                  final cookies = await cookieManager.getCookies(url);
+                  if (cookies.isEmpty) return null;
+                  return cookies
+                      .map((c) => '${c.name}=${c.value}')
+                      .join('; ');
+                } catch (_) {
+                  return null;
+                }
+              },
+            );
+          },
         ),
 
         ProxyProvider2<Readability4JExtended, ArticleDao, ArticleContentService>(
