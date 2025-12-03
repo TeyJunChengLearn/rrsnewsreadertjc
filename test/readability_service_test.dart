@@ -85,5 +85,53 @@ void main() {
       expect(result, isNotNull);
       expect(result!.imageUrl, 'https://example.com/images/meta.jpg');
     });
+    test('applies cookies when fetching subscriber RSS content', () async {
+      String? rssCookie;
+
+      const rssFeed = '''
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+          <channel>
+            <title>Example News</title>
+            <item>
+              <title>Subscriber Story</title>
+              <link>https://example.com/news/story</link>
+              <content:encoded>
+                <![CDATA[
+                  This is the full subscriber article body repeated several times to
+                  ensure it clears the minimum length check required by the readability
+                  RSS fallback handler. This text should be long enough once whitespace
+                  is normalized to be comfortably over two hundred characters for the
+                  test to pass as expected without truncation.
+                ]]>
+              </content:encoded>
+            </item>
+          </channel>
+        </rss>
+      ''';
+
+      final client = MockClient((request) async {
+        if (request.url.toString() == 'https://example.com/feed') {
+          rssCookie = request.headers['Cookie'];
+          return http.Response(rssFeed, 200);
+        }
+
+        // Default and metadata fetches intentionally return empty content so that
+        // the reader must fall back to the RSS feed for article text.
+        return http.Response('<html><body></body></html>', 200);
+      });
+
+      final readability = Readability4JExtended(
+        client: client,
+        cookieHeaderBuilder: (_) async => 'session=premium-user',
+      );
+
+      final result = await readability.extractMainContent(
+        'https://example.com/news/story',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.source, 'RSS');
+      expect(rssCookie, 'session=premium-user');
+    });
   });
 }

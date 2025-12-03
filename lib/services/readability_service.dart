@@ -12,7 +12,7 @@ class ArticleReadabilityResult {
   final String? source;
   final String? author;
   final DateTime? publishedDate;
-  
+
   const ArticleReadabilityResult({
     this.mainText,
     this.imageUrl,
@@ -72,17 +72,30 @@ class ReadabilityConfig {
     String? userAgent,
   })  : cookies = cookies,
         customHeaders = customHeaders,
-        paywallKeywords = paywallKeywords ?? const [
-          'subscribe', 'premium', 'members-only', 'paywall', 'locked',
-          'restricted', 'membership', 'subscriber', 'login-required',
-          'sign-in', 'register', 'purchase', 'subscribe now',
-          'To continue reading', 'This content is for subscribers only',
-        ],
+        paywallKeywords = paywallKeywords ??
+            const [
+              'subscribe',
+              'premium',
+              'members-only',
+              'paywall',
+              'locked',
+              'restricted',
+              'membership',
+              'subscriber',
+              'login-required',
+              'sign-in',
+              'register',
+              'purchase',
+              'subscribe now',
+              'To continue reading',
+              'This content is for subscribers only',
+            ],
         attemptRssFallback = attemptRssFallback ?? true,
         requestDelay = requestDelay ?? const Duration(seconds: 2),
         useMobileUserAgent = useMobileUserAgent ?? false,
-        userAgent = userAgent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        userAgent = userAgent ??
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 }
 
 /// RSS feed parser for news sites
@@ -92,27 +105,33 @@ class RssFeedParser {
   RssFeedParser({http.Client? client}) : _client = client ?? http.Client();
 
   /// Extract article content from RSS feed
-  Future<String?> extractFromRss(String rssUrl, String targetUrl) async {
+  Future<String?> extractFromRss(
+    String rssUrl,
+    String targetUrl, {
+    Map<String, String>? headers,
+  }) async {
     try {
-      final response = await _client.get(Uri.parse(rssUrl));
+      final response = await _client.get(
+        Uri.parse(rssUrl),
+        headers: headers,
+      );
       if (response.statusCode != 200) return null;
 
       final doc = html_parser.parse(response.body);
-      
+
       // Look for item with matching link
       final items = doc.querySelectorAll('item');
       for (final item in items) {
         final link = item.querySelector('link')?.text?.trim();
         final guid = item.querySelector('guid')?.text?.trim();
-        
+
         if ((link != null && (link == targetUrl || link.contains(targetUrl))) ||
             (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
-          
           // Try to get full content from different tags
           final content = item.querySelector('content|encoded')?.text ??
-                          item.querySelector('description')?.text ??
-                          item.querySelector('content')?.text;
-          
+              item.querySelector('description')?.text ??
+              item.querySelector('content')?.text;
+
           if (content != null && content.isNotEmpty) {
             return _cleanRssContent(content);
           }
@@ -127,7 +146,7 @@ class RssFeedParser {
   String _cleanRssContent(String content) {
     // Remove CDATA tags if present
     content = content.replaceAll(RegExp(r'<!\[CDATA\[|\]\]>'), '');
-    
+
     // Remove HTML tags, keep text
     final doc = html_parser.parseFragment(content);
     return doc.text?.trim() ?? '';
@@ -140,7 +159,7 @@ class Readability4JExtended {
   final ReadabilityConfig _config;
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
-final Future<String?> Function(String url)? cookieHeaderBuilder;
+  final Future<String?> Function(String url)? cookieHeaderBuilder;
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
@@ -154,7 +173,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     try {
       // Respect rate limiting
       await _respectRateLimit(url);
-      
+
       // Try multiple strategies in order
       final strategies = [
         _extractWithDefaultStrategy(url),
@@ -181,7 +200,8 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   }
 
   /// Strategy 1: Default extraction with desktop user agent
-  Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(String url) async {
+  Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(
+      String url) async {
     try {
       final headers = await _buildRequestHeaders(url); // 修复：添加await
       return await _extractContent(url, headers, 'Desktop');
@@ -192,7 +212,8 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   }
 
   /// Strategy 2: Extract with mobile user agent
-  Future<ArticleReadabilityResult?> _extractWithMobileStrategy(String url) async {
+  Future<ArticleReadabilityResult?> _extractWithMobileStrategy(
+      String url) async {
     try {
       final headers = await _buildRequestHeaders(url, mobile: true);
       return await _extractContent(url, headers, 'Mobile');
@@ -205,15 +226,20 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   /// Strategy 3: Try RSS feed for news sites
   Future<ArticleReadabilityResult?> _extractFromRssStrategy(String url) async {
     final rssUrls = _generateRssUrls(url);
-    
+
     for (final rssUrl in rssUrls) {
       try {
-        final rssContent = await _rssParser.extractFromRss(rssUrl, url);
+        final rssHeaders = await _buildRequestHeaders(rssUrl);
+        final rssContent = await _rssParser.extractFromRss(
+          rssUrl,
+          url,
+          headers: rssHeaders,
+        );
         if (rssContent != null && rssContent.length > 200) {
           final doc = await _fetchDocument(url);
           if (doc != null) {
             final metadata = _extractMetadata(doc, Uri.parse(url));
-            
+
             return ArticleReadabilityResult(
               mainText: rssContent,
               imageUrl: metadata.imageUrl,
@@ -229,7 +255,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
         continue;
       }
     }
-    
+
     return null;
   }
 
@@ -238,7 +264,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     final uri = Uri.parse(url);
     final baseUrl = '${uri.scheme}://${uri.host}';
     final path = uri.path;
-    
+
     final rssUrls = <String>[
       '$baseUrl/feed',
       '$baseUrl/rss',
@@ -248,21 +274,22 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       '$baseUrl/atom.xml',
       '$baseUrl/index.xml',
     ];
-    
+
     if (path.contains('/news/')) {
       final section = path.split('/')[1];
       rssUrls.addAll([
         '$baseUrl/$section/feed',
         '$baseUrl/$section/rss',
-        if (path.split('/').length > 2) '$baseUrl/category/${path.split('/')[2]}/feed',
+        if (path.split('/').length > 2)
+          '$baseUrl/category/${path.split('/')[2]}/feed',
       ]);
     }
-    
+
     rssUrls.addAll([
       '$baseUrl/?feed=rss2',
       '$baseUrl/?feed=atom',
     ]);
-    
+
     return rssUrls;
   }
 
@@ -279,7 +306,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       final isPaywalled = _detectPaywall(doc);
       final pageUri = Uri.parse(url);
       final metadata = _extractMetadata(doc, pageUri);
-      
+
       _cleanDocument(doc);
       _removePaywallElements(doc);
 
@@ -297,10 +324,11 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
         if (articleRoot != null) {
           final text = _extractMainText(articleRoot);
           content = _normalizeWhitespace(text);
-          
+
           if (_isContentTruncated(content)) {
             final hiddenContent = _extractHiddenContent(articleRoot);
-            if (hiddenContent != null && hiddenContent.length > content.length) {
+            if (hiddenContent != null &&
+                hiddenContent.length > content.length) {
               content = hiddenContent;
               source = 'Hidden Content';
             }
@@ -337,12 +365,13 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   ]) async {
     try {
       final effectiveHeaders = headers ?? await _buildRequestHeaders(url);
-      final response = await _client.get(Uri.parse(url), headers: effectiveHeaders);
-      
+      final response =
+          await _client.get(Uri.parse(url), headers: effectiveHeaders);
+
       if (response.statusCode != 200) {
         return null;
       }
-      
+
       return html_parser.parse(response.body);
     } catch (_) {
       return null;
@@ -354,12 +383,12 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     String url, {
     bool mobile = false,
   }) async {
-
     final headers = <String, String>{
       'User-Agent': mobile
           ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
           : _config.userAgent,
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept':
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate',
       'Connection': 'keep-alive',
@@ -367,16 +396,14 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     };
 
     // Add cookies
-     final builtCookie = cookieHeaderBuilder != null
-        ? await cookieHeaderBuilder!(url)
-        : null;
+    final builtCookie =
+        cookieHeaderBuilder != null ? await cookieHeaderBuilder!(url) : null;
 
     if (builtCookie != null && builtCookie.isNotEmpty) {
       headers['Cookie'] = builtCookie;
     } else if (_config.cookies != null && _config.cookies!.isNotEmpty) {
-      final cookieString = _config.cookies!.entries
-          .map((e) => '${e.key}=${e.value}')
-          .join('; ');
+      final cookieString =
+          _config.cookies!.entries.map((e) => '${e.key}=${e.value}').join('; ');
       headers['Cookie'] = cookieString;
     }
 
@@ -396,16 +423,16 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   Future<void> _respectRateLimit(String url) async {
     final domain = Uri.parse(url).host;
     final lastRequest = _lastRequestTime[domain];
-    
+
     if (lastRequest != null) {
       final elapsed = DateTime.now().difference(lastRequest);
       final delay = _config.requestDelay;
-      
+
       if (elapsed < delay) {
         await Future.delayed(delay - elapsed);
       }
     }
-    
+
     _lastRequestTime[domain] = DateTime.now();
   }
 
@@ -421,14 +448,19 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
 
   /// Extract page title
   String? _extractTitle(dom.Document doc) {
-    final ogTitle = doc.querySelector('meta[property="og:title"]')?.attributes['content'];
+    final ogTitle =
+        doc.querySelector('meta[property="og:title"]')?.attributes['content'];
     if (ogTitle != null && ogTitle.trim().isNotEmpty) return ogTitle.trim();
 
-    final twitterTitle = doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
-    if (twitterTitle != null && twitterTitle.trim().isNotEmpty) return twitterTitle.trim();
+    final twitterTitle =
+        doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
+    if (twitterTitle != null && twitterTitle.trim().isNotEmpty)
+      return twitterTitle.trim();
 
-    final schemaTitle = doc.querySelector('meta[itemprop="name"]')?.attributes['content'];
-    if (schemaTitle != null && schemaTitle.trim().isNotEmpty) return schemaTitle.trim();
+    final schemaTitle =
+        doc.querySelector('meta[itemprop="name"]')?.attributes['content'];
+    if (schemaTitle != null && schemaTitle.trim().isNotEmpty)
+      return schemaTitle.trim();
 
     final plainTitle = doc.querySelector('title')?.text;
     if (plainTitle != null && plainTitle.trim().isNotEmpty) {
@@ -445,15 +477,24 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
 
   /// Extract author information
   String? _extractAuthor(dom.Document doc) {
-    final ogAuthor = doc.querySelector('meta[property="og:author"]')?.attributes['content'] ??
-                     doc.querySelector('meta[property="article:author"]')?.attributes['content'];
+    final ogAuthor = doc
+            .querySelector('meta[property="og:author"]')
+            ?.attributes['content'] ??
+        doc
+            .querySelector('meta[property="article:author"]')
+            ?.attributes['content'];
     if (ogAuthor != null && ogAuthor.trim().isNotEmpty) return ogAuthor.trim();
 
-    final schemaAuthor = doc.querySelector('meta[itemprop="author"]')?.attributes['content'];
-    if (schemaAuthor != null && schemaAuthor.trim().isNotEmpty) return schemaAuthor.trim();
+    final schemaAuthor =
+        doc.querySelector('meta[itemprop="author"]')?.attributes['content'];
+    if (schemaAuthor != null && schemaAuthor.trim().isNotEmpty)
+      return schemaAuthor.trim();
 
-    final twitterAuthor = doc.querySelector('meta[name="twitter:creator"]')?.attributes['content'];
-    if (twitterAuthor != null && twitterAuthor.trim().isNotEmpty) return twitterAuthor.trim();
+    final twitterAuthor = doc
+        .querySelector('meta[name="twitter:creator"]')
+        ?.attributes['content'];
+    if (twitterAuthor != null && twitterAuthor.trim().isNotEmpty)
+      return twitterAuthor.trim();
 
     final authorSelectors = [
       '.author',
@@ -481,13 +522,19 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   /// Extract published date
   DateTime? _extractPublishedDate(dom.Document doc) {
     try {
-      final ogDate = doc.querySelector('meta[property="article:published_time"]')?.attributes['content'] ??
-                     doc.querySelector('meta[property="og:published_time"]')?.attributes['content'];
+      final ogDate = doc
+              .querySelector('meta[property="article:published_time"]')
+              ?.attributes['content'] ??
+          doc
+              .querySelector('meta[property="og:published_time"]')
+              ?.attributes['content'];
       if (ogDate != null && ogDate.trim().isNotEmpty) {
         return DateTime.tryParse(ogDate.trim());
       }
 
-      final schemaDate = doc.querySelector('meta[itemprop="datePublished"]')?.attributes['content'];
+      final schemaDate = doc
+          .querySelector('meta[itemprop="datePublished"]')
+          ?.attributes['content'];
       if (schemaDate != null && schemaDate.trim().isNotEmpty) {
         return DateTime.tryParse(schemaDate.trim());
       }
@@ -510,7 +557,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
             final parsed = DateTime.tryParse(dateTime.trim());
             if (parsed != null) return parsed;
           }
-          
+
           final dateText = dateElement.text?.trim();
           if (dateText != null && dateText.isNotEmpty) {
             final patterns = [
@@ -518,7 +565,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
               RegExp(r'\d{2}/\d{2}/\d{4}'),
               RegExp(r'\d{1,2}\s+\w+\s+\d{4}'),
             ];
-            
+
             for (final pattern in patterns) {
               final match = pattern.firstMatch(dateText);
               if (match != null) {
@@ -535,7 +582,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     } catch (_) {
       return null;
     }
-    
+
     return null;
   }
 
@@ -543,11 +590,10 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   bool _detectPaywall(dom.Document doc) {
     final bodyText = doc.body?.text?.toLowerCase() ?? '';
     final html = doc.outerHtml?.toLowerCase() ?? '';
-    
+
     for (final keyword in _config.paywallKeywords) {
-      if (bodyText.contains(keyword.toLowerCase()) || 
+      if (bodyText.contains(keyword.toLowerCase()) ||
           html.contains(keyword.toLowerCase())) {
-        
         final paywallElements = doc.querySelectorAll('''
           [class*="paywall"],
           [id*="paywall"],
@@ -556,13 +602,13 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
           [class*="subscribe"],
           [class*="members-only"]
         ''');
-        
+
         if (paywallElements.isNotEmpty) {
           return true;
         }
       }
     }
-    
+
     return false;
   }
 
@@ -639,22 +685,26 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   /// Extract content from JSON-LD metadata
   String? _extractJsonLdContent(dom.Document doc) {
     try {
-      final scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-      
+      final scripts =
+          doc.querySelectorAll('script[type="application/ld+json"]');
+
       for (final script in scripts) {
         final content = script.text?.trim();
         if (content == null || content.isEmpty) continue;
-        
+
         try {
           final json = jsonDecode(content);
           if (json is Map<String, dynamic>) {
-            if (json['@type'] == 'NewsArticle' || json['@type'] == 'Article' || json['@type'] == 'BlogPosting') {
-              final articleBody = json['articleBody'] ?? json['description'] ?? json['text'];
+            if (json['@type'] == 'NewsArticle' ||
+                json['@type'] == 'Article' ||
+                json['@type'] == 'BlogPosting') {
+              final articleBody =
+                  json['articleBody'] ?? json['description'] ?? json['text'];
               if (articleBody != null && articleBody is String) {
                 return articleBody.trim();
               }
             }
-            
+
             if (json['mainEntity'] is Map) {
               final mainEntity = json['mainEntity'] as Map<String, dynamic>;
               if (mainEntity['articleBody'] != null) {
@@ -670,14 +720,14 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     } catch (_) {
       return null;
     }
-    
+
     return null;
   }
 
   /// Check if content appears truncated
   bool _isContentTruncated(String? content) {
     if (content == null || content.length < 300) return false;
-    
+
     final truncatedPatterns = [
       RegExp(r'\.\.\.\s*$'),
       RegExp(r'…\s*$'),
@@ -687,29 +737,30 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       RegExp(r'to continue reading', caseSensitive: false),
       RegExp(r'premium content', caseSensitive: false),
     ];
-    
+
     for (final pattern in truncatedPatterns) {
       if (pattern.hasMatch(content)) {
         return true;
       }
     }
-    
+
     return false;
   }
 
   /// Extract hidden content from data attributes
   String? _extractHiddenContent(dom.Element root) {
-    final dataElements = root.querySelectorAll('[data-content], [data-article], [data-text]');
-    
+    final dataElements =
+        root.querySelectorAll('[data-content], [data-article], [data-text]');
+
     for (final el in dataElements) {
       final content = el.attributes['data-content'] ??
-                      el.attributes['data-article'] ??
-                      el.attributes['data-text'];
+          el.attributes['data-article'] ??
+          el.attributes['data-text'];
       if (content != null && content.length > 100) {
         return content;
       }
     }
-    
+
     return null;
   }
 
@@ -789,11 +840,11 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
   int _calculateElementScore(dom.Element el) {
     final blocks = el.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6');
     var total = 0.0;
-    
+
     for (final block in blocks) {
       final text = block.text?.trim() ?? '';
       if (text.isEmpty) continue;
-      
+
       double weight = 1.0;
       switch (block.localName) {
         case 'p':
@@ -808,10 +859,10 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
           weight = 1.2;
           break;
       }
-      
+
       total += text.length * weight;
     }
-    
+
     final linkCount = el.querySelectorAll('a').length;
     final textLength = el.text?.length ?? 0;
     if (textLength > 0) {
@@ -820,7 +871,7 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
         total *= 0.5;
       }
     }
-    
+
     return total.toInt();
   }
 
@@ -829,15 +880,16 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
     final buffer = StringBuffer();
     final seenTexts = <String>{};
 
-    final blocks = root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
-    
+    final blocks =
+        root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+
     for (final block in blocks) {
       final text = block.text?.trim() ?? '';
       if (text.isEmpty) continue;
-      
+
       if (seenTexts.contains(text)) continue;
       seenTexts.add(text);
-      
+
       if (block.localName?.startsWith('h') ?? false) {
         buffer.writeln('\n$text\n');
       } else {
@@ -851,19 +903,26 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
 
   /// Extract hero image from document
   String? _extractHeroImage(dom.Document doc, Uri pageUri) {
-    final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+    final ogImage =
+        doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     if (ogImage != null && ogImage.trim().isNotEmpty && _isGoodImage(ogImage)) {
       return _resolveImageUrl(ogImage.trim(), pageUri);
     }
 
-    final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
-    if (twitterImage != null && twitterImage.trim().isNotEmpty && _isGoodImage(twitterImage)) {
+    final twitterImage =
+        doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+    if (twitterImage != null &&
+        twitterImage.trim().isNotEmpty &&
+        _isGoodImage(twitterImage)) {
       return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
 
-    final schemaImage = doc.querySelector('meta[itemprop="image"]')?.attributes['content'];
-    if (schemaImage != null && schemaImage.trim().isNotEmpty && _isGoodImage(schemaImage)) {
-       return _resolveImageUrl(schemaImage.trim(), pageUri);
+    final schemaImage =
+        doc.querySelector('meta[itemprop="image"]')?.attributes['content'];
+    if (schemaImage != null &&
+        schemaImage.trim().isNotEmpty &&
+        _isGoodImage(schemaImage)) {
+      return _resolveImageUrl(schemaImage.trim(), pageUri);
     }
 
     final images = doc.querySelectorAll('img');
@@ -879,8 +938,9 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       final size = width * height;
 
       final parent = img.parent?.localName ?? '';
-      final isFigure = parent == 'figure' || img.className.contains('wp-block-image');
-      
+      final isFigure =
+          parent == 'figure' || img.className.contains('wp-block-image');
+
       if (size > bestSize || (isFigure && size > 10000)) {
         bestSize = size;
         bestImage = src;
@@ -892,27 +952,31 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
 
   /// Extract meta image for metadata
   String? _extractMetaImage(dom.Document doc, Uri pageUri) {
-    final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+    final ogImage =
+        doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     if (ogImage != null && ogImage.trim().isNotEmpty) {
       return _resolveImageUrl(ogImage.trim(), pageUri);
     }
-    
-    final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+
+    final twitterImage =
+        doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
     if (twitterImage != null && twitterImage.trim().isNotEmpty) {
       return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
-    
+
     return null;
   }
 
   /// Check if an image URL looks good (not junk)
   bool _isGoodImage(String url) {
     final lower = url.toLowerCase();
-    
-    if (lower.startsWith('data:') || lower.endsWith('.svg') || lower.endsWith('.gif')) {
+
+    if (lower.startsWith('data:') ||
+        lower.endsWith('.svg') ||
+        lower.endsWith('.gif')) {
       return false;
     }
-    
+
     const junkPatterns = [
       'logo',
       'icon',
@@ -932,25 +996,25 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       'thumb_',
       'favicon',
     ];
-    
+
     for (final pattern in junkPatterns) {
       if (lower.contains(pattern)) {
         return false;
       }
     }
-    
+
     return true;
   }
 
   /// Resolve relative image URLs to absolute URLs
   String? _resolveImageUrl(String? url, Uri baseUri) {
     if (url == null || url.trim().isEmpty) return null;
-    
+
     final uri = Uri.tryParse(url.trim());
     if (uri == null) return null;
-    
+
     if (uri.hasScheme) return uri.toString();
-    
+
     return baseUri.resolveUri(uri).toString();
   }
 
@@ -970,24 +1034,25 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       final text = div.text?.trim() ?? '';
       return text.length > 500;
     }).toList();
-    
+
     if (likelyContainers.isNotEmpty) {
-      final bestContainer = likelyContainers.reduce((a, b) => 
-          (a.text?.length ?? 0) > (b.text?.length ?? 0) ? a : b);
+      final bestContainer = likelyContainers.reduce(
+          (a, b) => (a.text?.length ?? 0) > (b.text?.length ?? 0) ? a : b);
       final text = _extractMainText(bestContainer);
       return _normalizeWhitespace(text);
     }
-    
+
     final bodyText = doc.body?.text ?? '';
     final normalized = _normalizeWhitespace(bodyText);
-    
+
     return normalized.length < 120 ? null : normalized;
   }
 
   /// Batch extract multiple articles
-  Future<List<ArticleReadabilityResult?>> extractArticles(List<String> urls) async {
+  Future<List<ArticleReadabilityResult?>> extractArticles(
+      List<String> urls) async {
     final results = <ArticleReadabilityResult?>[];
-    
+
     for (final url in urls) {
       try {
         final result = await extractMainContent(url);
@@ -995,10 +1060,10 @@ final Future<String?> Function(String url)? cookieHeaderBuilder;
       } catch (_) {
         results.add(null);
       }
-      
+
       await Future.delayed(_config.requestDelay);
     }
-    
+
     return results;
   }
 }
