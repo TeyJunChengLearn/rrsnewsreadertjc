@@ -140,10 +140,11 @@ class Readability4JExtended {
   final ReadabilityConfig _config;
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
-
+final Future<String?> Function(String url)? cookieHeaderBuilder;
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
+    this.cookieHeaderBuilder,
   })  : _client = client ?? http.Client(),
         _config = config ?? ReadabilityConfig(), // 使用非const构造函数
         _rssParser = RssFeedParser(client: client);
@@ -211,7 +212,7 @@ class Readability4JExtended {
         if (rssContent != null && rssContent.length > 200) {
           final doc = await _fetchDocument(url);
           if (doc != null) {
-            final metadata = _extractMetadata(doc);
+            final metadata = _extractMetadata(doc, Uri.parse(url));
             
             return ArticleReadabilityResult(
               mainText: rssContent,
@@ -276,7 +277,8 @@ class Readability4JExtended {
       if (doc == null) return null;
 
       final isPaywalled = _detectPaywall(doc);
-      final metadata = _extractMetadata(doc);
+      final pageUri = Uri.parse(url);
+      final metadata = _extractMetadata(doc, pageUri);
       
       _cleanDocument(doc);
       _removePaywallElements(doc);
@@ -312,7 +314,7 @@ class Readability4JExtended {
         return null;
       }
 
-      final heroImage = _extractHeroImage(doc);
+      final heroImage = _extractHeroImage(doc, pageUri);
 
       return ArticleReadabilityResult(
         mainText: content,
@@ -352,10 +354,6 @@ class Readability4JExtended {
     String url, {
     bool mobile = false,
   }) async {
-    // 确保 _config 不为 null
-    if (_config == null) {
-      throw StateError('ReadabilityConfig is null in Readability4JExtended');
-    }
 
     final headers = <String, String>{
       'User-Agent': mobile
@@ -369,7 +367,13 @@ class Readability4JExtended {
     };
 
     // Add cookies
-    if (_config.cookies != null && _config.cookies!.isNotEmpty) {
+     final builtCookie = cookieHeaderBuilder != null
+        ? await cookieHeaderBuilder!(url)
+        : null;
+
+    if (builtCookie != null && builtCookie.isNotEmpty) {
+      headers['Cookie'] = builtCookie;
+    } else if (_config.cookies != null && _config.cookies!.isNotEmpty) {
       final cookieString = _config.cookies!.entries
           .map((e) => '${e.key}=${e.value}')
           .join('; ');
@@ -406,12 +410,12 @@ class Readability4JExtended {
   }
 
   /// Extract metadata from document
-  _Metadata _extractMetadata(dom.Document doc) {
+  _Metadata _extractMetadata(dom.Document doc, Uri pageUri) {
     return _Metadata(
       title: _extractTitle(doc),
       author: _extractAuthor(doc),
       publishedDate: _extractPublishedDate(doc),
-      imageUrl: _extractMetaImage(doc),
+      imageUrl: _extractMetaImage(doc, pageUri),
     );
   }
 
@@ -846,20 +850,20 @@ class Readability4JExtended {
   }
 
   /// Extract hero image from document
-  String? _extractHeroImage(dom.Document doc) {
+  String? _extractHeroImage(dom.Document doc, Uri pageUri) {
     final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     if (ogImage != null && ogImage.trim().isNotEmpty && _isGoodImage(ogImage)) {
-      return _resolveImageUrl(ogImage.trim());
+      return _resolveImageUrl(ogImage.trim(), pageUri);
     }
 
     final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
     if (twitterImage != null && twitterImage.trim().isNotEmpty && _isGoodImage(twitterImage)) {
-      return _resolveImageUrl(twitterImage.trim());
+      return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
 
     final schemaImage = doc.querySelector('meta[itemprop="image"]')?.attributes['content'];
     if (schemaImage != null && schemaImage.trim().isNotEmpty && _isGoodImage(schemaImage)) {
-      return _resolveImageUrl(schemaImage.trim());
+       return _resolveImageUrl(schemaImage.trim(), pageUri);
     }
 
     final images = doc.querySelectorAll('img');
@@ -883,19 +887,19 @@ class Readability4JExtended {
       }
     }
 
-    return bestImage != null ? _resolveImageUrl(bestImage) : null;
+    return bestImage != null ? _resolveImageUrl(bestImage, pageUri) : null;
   }
 
   /// Extract meta image for metadata
-  String? _extractMetaImage(dom.Document doc) {
+  String? _extractMetaImage(dom.Document doc, Uri pageUri) {
     final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     if (ogImage != null && ogImage.trim().isNotEmpty) {
-      return _resolveImageUrl(ogImage.trim());
+      return _resolveImageUrl(ogImage.trim(), pageUri);
     }
     
     final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
     if (twitterImage != null && twitterImage.trim().isNotEmpty) {
-      return _resolveImageUrl(twitterImage.trim());
+      return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
     
     return null;
@@ -939,7 +943,7 @@ class Readability4JExtended {
   }
 
   /// Resolve relative image URLs to absolute URLs
-  String? _resolveImageUrl(String? url) {
+  String? _resolveImageUrl(String? url, Uri baseUri) {
     if (url == null || url.trim().isEmpty) return null;
     
     final uri = Uri.tryParse(url.trim());
@@ -947,7 +951,7 @@ class Readability4JExtended {
     
     if (uri.hasScheme) return uri.toString();
     
-    return url;
+    return baseUri.resolveUri(uri).toString();
   }
 
   /// Normalize whitespace in text

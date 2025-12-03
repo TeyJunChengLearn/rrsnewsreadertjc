@@ -15,3 +15,32 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 # rrsnewsreadertjc
+
+## Accessing paywalled articles
+
+The readability service can fetch subscriber-only pages as long as you provide
+valid session cookies for the site you already have access to. Configure a
+`cookieHeaderBuilder` (or static `cookies` map) when constructing
+`Readability4JExtended` so each request includes the correct authentication
+cookie for that domain.
+
+Example (per-URL cookies):
+
+```dart
+final readability = Readability4JExtended(
+  cookieHeaderBuilder: (url) async {
+    final host = Uri.parse(url).host;
+    if (host.contains('malaysiakini')) {
+      return 'mk-ssid=<your-signed-in-cookie>'; // replace with your own value
+    }
+    if (host.contains('example-paywall.com')) {
+      return 'sessionid=<your-session-cookie>';
+    }
+    return null; // fall back to public access
+  },
+);
+```
+
+This mechanism is global—any supported site can be fetched if the cookie is
+valid. The service does **not** bypass paywalls; you must supply your own
+subscriber cookies in accordance with the site’s terms.
