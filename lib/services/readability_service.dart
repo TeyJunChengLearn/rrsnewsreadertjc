@@ -128,9 +128,13 @@ class RssFeedParser {
         if ((link != null && (link == targetUrl || link.contains(targetUrl))) ||
             (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
           // Try to get full content from different tags
-          final content = item.querySelector('content|encoded')?.text ??
-              item.querySelector('description')?.text ??
-              item.querySelector('content')?.text;
+          final contentElement = item.getElementsByTagName('content:encoded');
+
+          final content =
+              (contentElement.isNotEmpty ? contentElement.first.text : null) ??
+                  item.querySelector('content|encoded')?.text ??
+                  item.querySelector('description')?.text ??
+                  item.querySelector('content')?.text;
 
           if (content != null && content.isNotEmpty) {
             return _cleanRssContent(content);
