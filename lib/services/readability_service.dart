@@ -1,8 +1,7 @@
 import 'package:html/dom.dart' as dom;
-import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
-import 'package:webview_cookie_manager/webview_cookie_manager.dart';
+
 /// Result of readability extraction: main article text + optional hero image.
 class ArticleReadabilityResult {
   final String? mainText;
@@ -32,17 +31,21 @@ class ArticleReadabilityResult {
 /// read "article-like" content, never the whole noisy page.
 class Readability4JExtended {
   final http.Client _client;
-  final Future<String?> Function(String url)? _cookieHeaderBuilder;
-  Readability4JExtended({
-    http.Client? client,
-    Future<String?> Function(String url)? cookieHeaderBuilder,
-  })  : _client = client ?? http.Client(),
-        _cookieHeaderBuilder = cookieHeaderBuilder;
+
+  Readability4JExtended({http.Client? client})
+      : _client = client ?? http.Client();
 
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
-      final headers = await _buildRequestHeaders(url);
-      final resp = await _client.get(Uri.parse(url), headers: headers);
+      final resp = await _client.get(
+        Uri.parse(url),
+        headers: const {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+        },
+      );
 
       if (resp.statusCode != 200) return null;
 
@@ -79,27 +82,7 @@ class Readability4JExtended {
       return null;
     }
   }
-  Future<Map<String, String>> _buildRequestHeaders(String url) async {
-    final headers = <String, String>{
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml',
-    };
 
-    if (_cookieHeaderBuilder != null) {
-      try {
-        final cookieHeader = await _cookieHeaderBuilder!(url);
-        if (cookieHeader != null && cookieHeader.trim().isNotEmpty) {
-          headers['Cookie'] = cookieHeader.trim();
-        }
-      } catch (_) {
-        // If cookie retrieval fails, continue without cookies.
-      }
-    }
-
-    return headers;
-  }
   // ---------------------------------------------------------------------------
   // DOM cleaning
   // ---------------------------------------------------------------------------
@@ -376,36 +359,5 @@ class Readability4JExtended {
     final normalized = _normalizeWhitespace(bodyText);
     // Avoid returning extremely short or obviously empty content.
     return normalized.length < 120 ? null : normalized;
-  }
-}
-class WebViewCookieHeaderLoader {
-  final WebviewCookieManager _manager = WebviewCookieManager();
-
-  Future<String?> buildHeader(String url) async {
-    // The WebView cookie manager is only meaningful on mobile platforms. Avoid
-    // invoking it on unsupported targets (web/desktop) to prevent missing
-    // plugin exceptions and simply proceed without cookies instead.
-    if (kIsWeb ||
-        (defaultTargetPlatform != TargetPlatform.android &&
-            defaultTargetPlatform != TargetPlatform.iOS)) {
-      return null;
-    }
-
-    try {
-      final cookies = await _manager.getCookies(url);
-      if (cookies.isEmpty) return null;
-
-      final pairs = cookies
-          .where((c) => (c.name ?? '').isNotEmpty)
-          .map((c) => '${c.name}=${c.value}')
-          .where((pair) => pair.trim().isNotEmpty)
-          .join('; ');
-
-      return pairs.isEmpty ? null : pairs;
-    } catch (_) {
-      // If reading cookies fails (e.g. platform doesn't support it),
-      // return null so the caller proceeds without authentication.
-      return null;
-    }
   }
 }
