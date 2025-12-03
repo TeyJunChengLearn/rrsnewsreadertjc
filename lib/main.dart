@@ -8,7 +8,7 @@ import 'providers/rss_provider.dart';
 import 'services/database_service.dart';
 import 'services/article_dao.dart';
 import 'services/feed_source_dao.dart';
-import 'services/readability_service.dart';
+import 'services/readability_service.dart' as readability;
 import 'services/article_content_service.dart';
 
 import 'data/http_feed_fetcher.dart';
@@ -50,13 +50,16 @@ class AppBootstrap extends StatelessWidget {
         ProxyProvider<DatabaseService, FeedSourceDao>(
           update: (_, db, __) => FeedSourceDao(db),
         ),
-        Provider<Readability4JExtended>(
-          create: (_) => Readability4JExtended(),
-        ),
+        Provider<readability.Readability4JExtended>(
+          create: (_) => readability.Readability4JExtended(
+            cookieHeaderBuilder:
+                readability.WebViewCookieHeaderLoader().buildHeader,
+          ),
 
-        ProxyProvider2<Readability4JExtended, ArticleDao, ArticleContentService>(
-          update: (_, readability, articleDao, __) => ArticleContentService(
-            readability: readability,
+        ProxyProvider2<readability.Readability4JExtended, ArticleDao,
+            ArticleContentService>(
+          update: (_, readabilityService, articleDao, __) => ArticleContentService(
+            readability: readabilityService,
             articleDao: articleDao,
           ),
         ),

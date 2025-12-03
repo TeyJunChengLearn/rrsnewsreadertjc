@@ -26,8 +26,10 @@ void main() {
       ''';
 
       final client = MockClient((request) async => http.Response(html, 200));
-      final readability = Readability4JExtended(client: client);
-
+      final readability = Readability4JExtended(
+        client: client,
+        cookieHeaderBuilder: (_) async => null,
+      );
       final result = await readability.extractMainContent('https://example.com/story');
 
       expect(result, isNotNull);
