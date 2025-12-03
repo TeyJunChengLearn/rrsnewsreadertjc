@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
@@ -7,175 +8,710 @@ class ArticleReadabilityResult {
   final String? mainText;
   final String? imageUrl;
   final String? pageTitle;
-  const ArticleReadabilityResult(
-      {this.mainText, this.imageUrl, this.pageTitle});
+  final bool? isPaywalled;
+  final String? source;
+  final String? author;
+  final DateTime? publishedDate;
+  
+  const ArticleReadabilityResult({
+    this.mainText,
+    this.imageUrl,
+    this.pageTitle,
+    this.isPaywalled,
+    this.source,
+    this.author,
+    this.publishedDate,
+  });
 
   bool get hasContent =>
       (mainText != null && mainText!.isNotEmpty) ||
       (imageUrl != null && imageUrl!.isNotEmpty);
+
+  @override
+  String toString() {
+    return 'ArticleReadabilityResult{'
+        'title: $pageTitle, '
+        'textLength: ${mainText?.length ?? 0}, '
+        'isPaywalled: $isPaywalled, '
+        'source: $source}';
+  }
 }
 
-/// "Readability4JExtended-style" extractor.
-///
-/// - Fetches HTML for a URL
-/// - Strips obvious noise (header, footer, nav, etc.)
-/// - Finds a likely article container:
-///     1. semantic tags (article/main/role=main/etc.)
-///     2. best-scoring <div>/<section> by text length
-/// - Extracts text from <p> and <li>
-/// - Picks a reasonable hero image
-///
-/// IMPORTANT:
-/// If no container has enough real article text, this returns `null`
-/// instead of falling back to the entire <body>. That way TTS will only
-/// read "article-like" content, never the whole noisy page.
+/// Metadata extraction result
+class _Metadata {
+  final String? title;
+  final String? author;
+  final DateTime? publishedDate;
+  final String? imageUrl;
+
+  _Metadata({
+    this.title,
+    this.author,
+    this.publishedDate,
+    this.imageUrl,
+  });
+}
+
+/// Configuration for the readability service - FIXED CONSTRUCTOR
+class ReadabilityConfig {
+  final Map<String, String>? cookies;
+  final Map<String, String>? customHeaders;
+  final List<String> paywallKeywords;
+  final bool attemptRssFallback;
+  final Duration requestDelay;
+  final bool useMobileUserAgent;
+  final String userAgent;
+
+  ReadabilityConfig({
+    Map<String, String>? cookies,
+    Map<String, String>? customHeaders,
+    List<String>? paywallKeywords,
+    bool? attemptRssFallback,
+    Duration? requestDelay,
+    bool? useMobileUserAgent,
+    String? userAgent,
+  })  : cookies = cookies,
+        customHeaders = customHeaders,
+        paywallKeywords = paywallKeywords ?? const [
+          'subscribe', 'premium', 'members-only', 'paywall', 'locked',
+          'restricted', 'membership', 'subscriber', 'login-required',
+          'sign-in', 'register', 'purchase', 'subscribe now',
+          'To continue reading', 'This content is for subscribers only',
+        ],
+        attemptRssFallback = attemptRssFallback ?? true,
+        requestDelay = requestDelay ?? const Duration(seconds: 2),
+        useMobileUserAgent = useMobileUserAgent ?? false,
+        userAgent = userAgent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+}
+
+/// RSS feed parser for news sites
+class RssFeedParser {
+  final http.Client _client;
+
+  RssFeedParser({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Extract article content from RSS feed
+  Future<String?> extractFromRss(String rssUrl, String targetUrl) async {
+    try {
+      final response = await _client.get(Uri.parse(rssUrl));
+      if (response.statusCode != 200) return null;
+
+      final doc = html_parser.parse(response.body);
+      
+      // Look for item with matching link
+      final items = doc.querySelectorAll('item');
+      for (final item in items) {
+        final link = item.querySelector('link')?.text?.trim();
+        final guid = item.querySelector('guid')?.text?.trim();
+        
+        if ((link != null && (link == targetUrl || link.contains(targetUrl))) ||
+            (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
+          
+          // Try to get full content from different tags
+          final content = item.querySelector('content|encoded')?.text ??
+                          item.querySelector('description')?.text ??
+                          item.querySelector('content')?.text;
+          
+          if (content != null && content.isNotEmpty) {
+            return _cleanRssContent(content);
+          }
+        }
+      }
+    } catch (e) {
+      print('RSS parsing error: $e');
+    }
+    return null;
+  }
+
+  String _cleanRssContent(String content) {
+    // Remove CDATA tags if present
+    content = content.replaceAll(RegExp(r'<!\[CDATA\[|\]\]>'), '');
+    
+    // Remove HTML tags, keep text
+    final doc = html_parser.parseFragment(content);
+    return doc.text?.trim() ?? '';
+  }
+}
+
+/// Main readability class
 class Readability4JExtended {
   final http.Client _client;
-  final Future<String?> Function(Uri url)? cookieHeaderBuilder;
-  Readability4JExtended({http.Client? client, this.cookieHeaderBuilder})
-      : _client = client ?? http.Client();
+  final ReadabilityConfig _config;
+  final RssFeedParser _rssParser;
+  final Map<String, DateTime> _lastRequestTime = {};
 
+  Readability4JExtended({
+    http.Client? client,
+    ReadabilityConfig? config,
+  })  : _client = client ?? http.Client(),
+        _config = config ?? ReadabilityConfig(), // 使用非const构造函数
+        _rssParser = RssFeedParser(client: client);
+
+  /// Main extraction method
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
-       final headers = await _buildRequestHeaders(url);
-      final resp = await _client.get(Uri.parse(url), headers: headers);
+      // Respect rate limiting
+      await _respectRateLimit(url);
+      
+      // Try multiple strategies in order
+      final strategies = [
+        _extractWithDefaultStrategy(url),
+        if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
+        if (_config.attemptRssFallback) _extractFromRssStrategy(url),
+      ];
 
-      if (resp.statusCode != 200) return null;
-
-      final doc = html_parser.parse(resp.body);
-
-      _stripNoise(doc);
-
-      final title = _extractPageTitle(doc);
-      final articleRoot = _findArticleRoot(doc);
-
-      String? normalized;
-      if (articleRoot != null) {
-        final text = _extractMainText(articleRoot);
-        normalized = _normalizeWhitespace(text);
+      for (final strategy in strategies) {
+        try {
+          final result = await strategy;
+          if (result != null && result.hasContent) {
+            return result;
+          }
+        } catch (_) {
+          continue;
+        }
       }
 
-      normalized ??= _fallbackBodyText(doc);
+      return null;
+    } catch (e) {
+      print('Error extracting content from $url: $e');
+      return null;
+    }
+  }
 
-      if (normalized == null || normalized.isEmpty) {
+  /// Strategy 1: Default extraction with desktop user agent
+  Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(String url) async {
+    try {
+      final headers = await _buildRequestHeaders(url); // 修复：添加await
+      return await _extractContent(url, headers, 'Desktop');
+    } catch (e) {
+      print('Error in _extractWithDefaultStrategy: $e');
+      return null;
+    }
+  }
+
+  /// Strategy 2: Extract with mobile user agent
+  Future<ArticleReadabilityResult?> _extractWithMobileStrategy(String url) async {
+    try {
+      final headers = await _buildRequestHeaders(url, mobile: true);
+      return await _extractContent(url, headers, 'Mobile');
+    } catch (e) {
+      print('Error in _extractWithMobileStrategy: $e');
+      return null;
+    }
+  }
+
+  /// Strategy 3: Try RSS feed for news sites
+  Future<ArticleReadabilityResult?> _extractFromRssStrategy(String url) async {
+    final rssUrls = _generateRssUrls(url);
+    
+    for (final rssUrl in rssUrls) {
+      try {
+        final rssContent = await _rssParser.extractFromRss(rssUrl, url);
+        if (rssContent != null && rssContent.length > 200) {
+          final doc = await _fetchDocument(url);
+          if (doc != null) {
+            final metadata = _extractMetadata(doc);
+            
+            return ArticleReadabilityResult(
+              mainText: rssContent,
+              imageUrl: metadata.imageUrl,
+              pageTitle: metadata.title,
+              isPaywalled: false,
+              source: 'RSS',
+              author: metadata.author,
+              publishedDate: metadata.publishedDate,
+            );
+          }
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    
+    return null;
+  }
+
+  /// Generate possible RSS feed URLs for a given news URL
+  List<String> _generateRssUrls(String url) {
+    final uri = Uri.parse(url);
+    final baseUrl = '${uri.scheme}://${uri.host}';
+    final path = uri.path;
+    
+    final rssUrls = <String>[
+      '$baseUrl/feed',
+      '$baseUrl/rss',
+      '$baseUrl/feed/rss',
+      '$baseUrl/feed.xml',
+      '$baseUrl/rss.xml',
+      '$baseUrl/atom.xml',
+      '$baseUrl/index.xml',
+    ];
+    
+    if (path.contains('/news/')) {
+      final section = path.split('/')[1];
+      rssUrls.addAll([
+        '$baseUrl/$section/feed',
+        '$baseUrl/$section/rss',
+        if (path.split('/').length > 2) '$baseUrl/category/${path.split('/')[2]}/feed',
+      ]);
+    }
+    
+    rssUrls.addAll([
+      '$baseUrl/?feed=rss2',
+      '$baseUrl/?feed=atom',
+    ]);
+    
+    return rssUrls;
+  }
+
+  /// Common extraction logic
+  Future<ArticleReadabilityResult?> _extractContent(
+    String url,
+    Map<String, String> headers,
+    String strategyName,
+  ) async {
+    try {
+      final doc = await _fetchDocument(url, headers);
+      if (doc == null) return null;
+
+      final isPaywalled = _detectPaywall(doc);
+      final metadata = _extractMetadata(doc);
+      
+      _cleanDocument(doc);
+      _removePaywallElements(doc);
+
+      String? content;
+      String? source = strategyName;
+
+      final jsonLdContent = _extractJsonLdContent(doc);
+      if (jsonLdContent != null && jsonLdContent.length > 200) {
+        content = jsonLdContent;
+        source = 'JSON-LD';
+      }
+
+      if (content == null) {
+        final articleRoot = _findArticleRoot(doc);
+        if (articleRoot != null) {
+          final text = _extractMainText(articleRoot);
+          content = _normalizeWhitespace(text);
+          
+          if (_isContentTruncated(content)) {
+            final hiddenContent = _extractHiddenContent(articleRoot);
+            if (hiddenContent != null && hiddenContent.length > content.length) {
+              content = hiddenContent;
+              source = 'Hidden Content';
+            }
+          }
+        }
+      }
+
+      content ??= _extractFallbackText(doc);
+
+      if (content == null || content.isEmpty) {
         return null;
       }
 
-      final heroImage = _extractLeadImage(doc, articleRoot, url);
+      final heroImage = _extractHeroImage(doc);
 
-
-      final result = ArticleReadabilityResult(
-        mainText: normalized,
+      return ArticleReadabilityResult(
+        mainText: content,
         imageUrl: heroImage,
-        pageTitle: title,
+        pageTitle: metadata.title,
+        isPaywalled: isPaywalled,
+        source: source,
+        author: metadata.author,
+        publishedDate: metadata.publishedDate,
       );
-
-      return result.hasContent ? result : null;
     } catch (_) {
       return null;
     }
   }
-  Future<Map<String, String>> _buildRequestHeaders(String url) async {
+
+  /// Fetch document with error handling
+  Future<dom.Document?> _fetchDocument(
+    String url, [
+    Map<String, String>? headers,
+  ]) async {
+    try {
+      final effectiveHeaders = headers ?? await _buildRequestHeaders(url);
+      final response = await _client.get(Uri.parse(url), headers: effectiveHeaders);
+      
+      if (response.statusCode != 200) {
+        return null;
+      }
+      
+      return html_parser.parse(response.body);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Build request headers - FIXED NULL SAFETY
+  Future<Map<String, String>> _buildRequestHeaders(
+    String url, {
+    bool mobile = false,
+  }) async {
+    // 确保 _config 不为 null
+    if (_config == null) {
+      throw StateError('ReadabilityConfig is null in Readability4JExtended');
+    }
+
     final headers = <String, String>{
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml',
+      'User-Agent': mobile
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+          : _config.userAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
     };
 
-    if (cookieHeaderBuilder != null) {
-      final cookie = await cookieHeaderBuilder!(Uri.parse(url));
-      if (cookie != null && cookie.trim().isNotEmpty) {
-        headers['Cookie'] = cookie.trim();
-      }
+    // Add cookies
+    if (_config.cookies != null && _config.cookies!.isNotEmpty) {
+      final cookieString = _config.cookies!.entries
+          .map((e) => '${e.key}=${e.value}')
+          .join('; ');
+      headers['Cookie'] = cookieString;
     }
+
+    // Add custom headers
+    if (_config.customHeaders != null) {
+      headers.addAll(_config.customHeaders!);
+    }
+
+    // Add referer header
+    final uri = Uri.parse(url);
+    headers['Referer'] = '${uri.scheme}://${uri.host}';
 
     return headers;
   }
-  // ---------------------------------------------------------------------------
-  // DOM cleaning
-  // ---------------------------------------------------------------------------
 
-  void _stripNoise(dom.Document doc) {
-    // Remove hard-noise tags.
+  /// Respect rate limiting per domain
+  Future<void> _respectRateLimit(String url) async {
+    final domain = Uri.parse(url).host;
+    final lastRequest = _lastRequestTime[domain];
+    
+    if (lastRequest != null) {
+      final elapsed = DateTime.now().difference(lastRequest);
+      final delay = _config.requestDelay;
+      
+      if (elapsed < delay) {
+        await Future.delayed(delay - elapsed);
+      }
+    }
+    
+    _lastRequestTime[domain] = DateTime.now();
+  }
+
+  /// Extract metadata from document
+  _Metadata _extractMetadata(dom.Document doc) {
+    return _Metadata(
+      title: _extractTitle(doc),
+      author: _extractAuthor(doc),
+      publishedDate: _extractPublishedDate(doc),
+      imageUrl: _extractMetaImage(doc),
+    );
+  }
+
+  /// Extract page title
+  String? _extractTitle(dom.Document doc) {
+    final ogTitle = doc.querySelector('meta[property="og:title"]')?.attributes['content'];
+    if (ogTitle != null && ogTitle.trim().isNotEmpty) return ogTitle.trim();
+
+    final twitterTitle = doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
+    if (twitterTitle != null && twitterTitle.trim().isNotEmpty) return twitterTitle.trim();
+
+    final schemaTitle = doc.querySelector('meta[itemprop="name"]')?.attributes['content'];
+    if (schemaTitle != null && schemaTitle.trim().isNotEmpty) return schemaTitle.trim();
+
+    final plainTitle = doc.querySelector('title')?.text;
+    if (plainTitle != null && plainTitle.trim().isNotEmpty) {
+      return plainTitle.trim();
+    }
+
+    final h1 = doc.querySelector('h1')?.text;
+    if (h1 != null && h1.trim().isNotEmpty) {
+      return h1.trim();
+    }
+
+    return null;
+  }
+
+  /// Extract author information
+  String? _extractAuthor(dom.Document doc) {
+    final ogAuthor = doc.querySelector('meta[property="og:author"]')?.attributes['content'] ??
+                     doc.querySelector('meta[property="article:author"]')?.attributes['content'];
+    if (ogAuthor != null && ogAuthor.trim().isNotEmpty) return ogAuthor.trim();
+
+    final schemaAuthor = doc.querySelector('meta[itemprop="author"]')?.attributes['content'];
+    if (schemaAuthor != null && schemaAuthor.trim().isNotEmpty) return schemaAuthor.trim();
+
+    final twitterAuthor = doc.querySelector('meta[name="twitter:creator"]')?.attributes['content'];
+    if (twitterAuthor != null && twitterAuthor.trim().isNotEmpty) return twitterAuthor.trim();
+
+    final authorSelectors = [
+      '.author',
+      '.byline',
+      '[rel="author"]',
+      '.post-author',
+      '.article-author',
+      '.story-author',
+      'a[href*="/author/"]',
+    ];
+
+    for (final selector in authorSelectors) {
+      final authorElement = doc.querySelector(selector);
+      if (authorElement != null) {
+        final authorText = authorElement.text?.trim();
+        if (authorText != null && authorText.isNotEmpty) {
+          return authorText;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Extract published date
+  DateTime? _extractPublishedDate(dom.Document doc) {
+    try {
+      final ogDate = doc.querySelector('meta[property="article:published_time"]')?.attributes['content'] ??
+                     doc.querySelector('meta[property="og:published_time"]')?.attributes['content'];
+      if (ogDate != null && ogDate.trim().isNotEmpty) {
+        return DateTime.tryParse(ogDate.trim());
+      }
+
+      final schemaDate = doc.querySelector('meta[itemprop="datePublished"]')?.attributes['content'];
+      if (schemaDate != null && schemaDate.trim().isNotEmpty) {
+        return DateTime.tryParse(schemaDate.trim());
+      }
+
+      final dateSelectors = [
+        'time[datetime]',
+        '.date',
+        '.published',
+        '.post-date',
+        '.article-date',
+        '.story-date',
+        '.timestamp',
+      ];
+
+      for (final selector in dateSelectors) {
+        final dateElement = doc.querySelector(selector);
+        if (dateElement != null) {
+          final dateTime = dateElement.attributes['datetime'];
+          if (dateTime != null && dateTime.trim().isNotEmpty) {
+            final parsed = DateTime.tryParse(dateTime.trim());
+            if (parsed != null) return parsed;
+          }
+          
+          final dateText = dateElement.text?.trim();
+          if (dateText != null && dateText.isNotEmpty) {
+            final patterns = [
+              RegExp(r'\d{4}-\d{2}-\d{2}'),
+              RegExp(r'\d{2}/\d{2}/\d{4}'),
+              RegExp(r'\d{1,2}\s+\w+\s+\d{4}'),
+            ];
+            
+            for (final pattern in patterns) {
+              final match = pattern.firstMatch(dateText);
+              if (match != null) {
+                try {
+                  return DateTime.parse(match.group(0)!);
+                } catch (_) {
+                  continue;
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    
+    return null;
+  }
+
+  /// Detect paywall on page
+  bool _detectPaywall(dom.Document doc) {
+    final bodyText = doc.body?.text?.toLowerCase() ?? '';
+    final html = doc.outerHtml?.toLowerCase() ?? '';
+    
+    for (final keyword in _config.paywallKeywords) {
+      if (bodyText.contains(keyword.toLowerCase()) || 
+          html.contains(keyword.toLowerCase())) {
+        
+        final paywallElements = doc.querySelectorAll('''
+          [class*="paywall"],
+          [id*="paywall"],
+          [class*="premium"],
+          [id*="premium"],
+          [class*="subscribe"],
+          [class*="members-only"]
+        ''');
+        
+        if (paywallElements.isNotEmpty) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  /// Clean document by removing noise elements
+  void _cleanDocument(dom.Document doc) {
     final garbage = doc.querySelectorAll(
-      'script,style,noscript,form,iframe',
+      'script,style,noscript,form,iframe,video,audio,svg,canvas',
     );
     for (final node in garbage) {
       node.remove();
     }
 
-    // Remove elements that are very likely to be navigation/ads/etc.
-    final candidates = doc.querySelectorAll('*').toList();
-    for (final el in candidates) {
-      final tag = el.localName ?? '';
-      if (tag == 'header' ||
-          tag == 'footer' ||
-          tag == 'nav' ||
-          tag == 'aside') {
-        el.remove();
-        continue;
+    final noiseSelectors = [
+      'header',
+      'footer',
+      'nav',
+      'aside',
+      'dialog',
+      'modal',
+      '.sidebar',
+      '.navigation',
+      '.advertisement',
+      '.ad',
+      '.banner',
+      '.popup',
+      '.modal',
+      '.newsletter',
+      '.social-share',
+      '.related-posts',
+      '.comments',
+      '.comment-section',
+    ];
+
+    for (final selector in noiseSelectors) {
+      final elements = doc.querySelectorAll(selector);
+      for (final element in elements) {
+        element.remove();
       }
+    }
+  }
 
-      final id = (el.id ?? '').toLowerCase();
-      final classAttr = (el.className ?? '').toLowerCase();
-      final marker = '$id $classAttr';
+  /// Remove paywall-specific elements
+  void _removePaywallElements(dom.Document doc) {
+    final paywallSelectors = [
+      '[class*="paywall"]',
+      '[id*="paywall"]',
+      '[class*="premium"]',
+      '[id*="premium"]',
+      '[class*="locked"]',
+      '[id*="locked"]',
+      '[class*="restricted"]',
+      '[class*="members-only"]',
+      '[class*="subscribe"]',
+      '[class*="register"]',
+      '.paywall',
+      '.premium-content',
+      '.content-locked',
+      '.article-locked',
+      '.teaser',
+      '.excerpt',
+      '.partial-content',
+      '.blurred',
+      '.obscured',
+    ];
 
-      const badHints = <String>[
-        'nav',
-        'menu',
-        'footer',
-        'header',
-        'sidebar',
-        'subscribe',
-        'signup',
-        'comment',
-        'comments',
-        'share',
-        'sharing',
-        'related',
-        'recommend',
-        'promo',
-        'advert',
-        'ad-',
-        'banner',
-        'cookie',
-        'consent',
-        'modal',
-        'popup',
-      ];
-
-      if (badHints.any((h) => marker.contains(h))) {
+    for (final selector in paywallSelectors) {
+      final elements = doc.querySelectorAll(selector);
+      for (final el in elements) {
         el.remove();
       }
     }
   }
 
-  String? _extractPageTitle(dom.Document doc) {
-    // Prefer Open Graph/Twitter title if available
-    final og =
-        doc.querySelector('meta[property="og:title"]')?.attributes['content'];
-    if (og != null && og.trim().isNotEmpty) return og.trim();
-
-    final twitter =
-        doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
-    if (twitter != null && twitter.trim().isNotEmpty) return twitter.trim();
-
-    final plainTitle = doc.querySelector('title')?.text;
-    if (plainTitle != null && plainTitle.trim().isNotEmpty)
-      return plainTitle.trim();
-
+  /// Extract content from JSON-LD metadata
+  String? _extractJsonLdContent(dom.Document doc) {
+    try {
+      final scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+      
+      for (final script in scripts) {
+        final content = script.text?.trim();
+        if (content == null || content.isEmpty) continue;
+        
+        try {
+          final json = jsonDecode(content);
+          if (json is Map<String, dynamic>) {
+            if (json['@type'] == 'NewsArticle' || json['@type'] == 'Article' || json['@type'] == 'BlogPosting') {
+              final articleBody = json['articleBody'] ?? json['description'] ?? json['text'];
+              if (articleBody != null && articleBody is String) {
+                return articleBody.trim();
+              }
+            }
+            
+            if (json['mainEntity'] is Map) {
+              final mainEntity = json['mainEntity'] as Map<String, dynamic>;
+              if (mainEntity['articleBody'] != null) {
+                final body = mainEntity['articleBody'] as String;
+                return body.trim();
+              }
+            }
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    
     return null;
   }
-  // ---------------------------------------------------------------------------
-  // Article container selection
-  // ---------------------------------------------------------------------------
 
-  static const int _minArticleScore = 400;
+  /// Check if content appears truncated
+  bool _isContentTruncated(String? content) {
+    if (content == null || content.length < 300) return false;
+    
+    final truncatedPatterns = [
+      RegExp(r'\.\.\.\s*$'),
+      RegExp(r'…\s*$'),
+      RegExp(r'continue reading', caseSensitive: false),
+      RegExp(r'read more', caseSensitive: false),
+      RegExp(r'subscribe to read', caseSensitive: false),
+      RegExp(r'to continue reading', caseSensitive: false),
+      RegExp(r'premium content', caseSensitive: false),
+    ];
+    
+    for (final pattern in truncatedPatterns) {
+      if (pattern.hasMatch(content)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
 
+  /// Extract hidden content from data attributes
+  String? _extractHiddenContent(dom.Element root) {
+    final dataElements = root.querySelectorAll('[data-content], [data-article], [data-text]');
+    
+    for (final el in dataElements) {
+      final content = el.attributes['data-content'] ??
+                      el.attributes['data-article'] ??
+                      el.attributes['data-text'];
+      if (content != null && content.length > 100) {
+        return content;
+      }
+    }
+    
+    return null;
+  }
+
+  /// Find the main article root element
   dom.Element? _findArticleRoot(dom.Document doc) {
-    // 1) Try semantic / common content wrappers with scoring
-    final prioritySelectors = <String>[
+    final prioritySelectors = [
       'article',
       'main',
       '[role="main"]',
@@ -185,6 +721,14 @@ class Readability4JExtended {
       '.article-body',
       '.story-body',
       '.entry-content',
+      '.article-content',
+      '.post-content',
+      '.story-content',
+      '.news-content',
+      '.article-text',
+      '.article-main',
+      '.main-content',
+      '.post-body',
     ];
 
     dom.Element? best;
@@ -193,7 +737,7 @@ class Readability4JExtended {
     for (final selector in prioritySelectors) {
       final els = doc.querySelectorAll(selector);
       for (final el in els) {
-        final score = _textScore(el);
+        final score = _calculateElementScore(el);
         if (score > bestScore) {
           bestScore = score;
           best = el;
@@ -201,161 +745,212 @@ class Readability4JExtended {
       }
     }
 
-    if (best != null && bestScore >= _minArticleScore) {
+    const minArticleScore = 200;
+    if (best != null && bestScore >= minArticleScore) {
       return best;
     }
 
-    // 2) Fallback: search all div/section for the "text richest" one.
     best = null;
     bestScore = 0;
 
     final allBlocks = <dom.Element>[];
     allBlocks.addAll(doc.querySelectorAll('div'));
     allBlocks.addAll(doc.querySelectorAll('section'));
+    allBlocks.addAll(doc.querySelectorAll('article'));
 
     for (final el in allBlocks) {
-      final score = _textScore(el);
+      final score = _calculateElementScore(el);
       if (score > bestScore) {
         bestScore = score;
         best = el;
       }
     }
 
-    if (best != null && bestScore >= _minArticleScore) {
+    if (best != null && bestScore >= minArticleScore) {
       return best;
     }
 
-    // Nothing reaches our minimum article score.
+    final body = doc.body;
+    if (body != null) {
+      final bodyScore = _calculateElementScore(body);
+      if (bodyScore >= minArticleScore) {
+        return body;
+      }
+    }
+
     return null;
   }
 
-  int _textScore(dom.Element el) {
-    // Score is total length of all <p> and <li> text under this element.
-    final blocks = el.querySelectorAll('p, li');
-    var total = 0;
-    for (final b in blocks) {
-      final t = b.text.trim();
-      if (t.isEmpty) continue;
-      total += t.length;
+  /// Calculate score for an element based on text content
+  int _calculateElementScore(dom.Element el) {
+    final blocks = el.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6');
+    var total = 0.0;
+    
+    for (final block in blocks) {
+      final text = block.text?.trim() ?? '';
+      if (text.isEmpty) continue;
+      
+      double weight = 1.0;
+      switch (block.localName) {
+        case 'p':
+          weight = 1.5;
+          break;
+        case 'h1':
+        case 'h2':
+        case 'h3':
+          weight = 0.8;
+          break;
+        case 'li':
+          weight = 1.2;
+          break;
+      }
+      
+      total += text.length * weight;
     }
-    return total;
+    
+    final linkCount = el.querySelectorAll('a').length;
+    final textLength = el.text?.length ?? 0;
+    if (textLength > 0) {
+      final linkDensity = linkCount / (textLength / 100);
+      if (linkDensity > 2.0) {
+        total *= 0.5;
+      }
+    }
+    
+    return total.toInt();
   }
 
-  // ---------------------------------------------------------------------------
-  // Text extraction
-  // ---------------------------------------------------------------------------
-
+  /// Extract main text from article root
   String _extractMainText(dom.Element root) {
     final buffer = StringBuffer();
+    final seenTexts = <String>{};
 
-    final blocks = root.querySelectorAll('p, li');
+    final blocks = root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+    
     for (final block in blocks) {
-      final text = block.text.trim();
+      final text = block.text?.trim() ?? '';
       if (text.isEmpty) continue;
-      buffer.writeln(text);
-      buffer.writeln();
+      
+      if (seenTexts.contains(text)) continue;
+      seenTexts.add(text);
+      
+      if (block.localName?.startsWith('h') ?? false) {
+        buffer.writeln('\n$text\n');
+      } else {
+        buffer.writeln(text);
+        buffer.writeln();
+      }
     }
 
     return buffer.toString();
   }
 
-  // ---------------------------------------------------------------------------
-  // Lead image selection
-  // ---------------------------------------------------------------------------
-
-  String? _extractLeadImage(
-    dom.Document doc,
-    dom.Element? articleRoot,
-    String baseUrl,
-  ) {
-    String? resolve(String? src) {
-      if (src == null || src.trim().isEmpty) return null;
-      final srcUri = Uri.tryParse(src.trim());
-      if (srcUri == null) return null;
-      if (srcUri.hasScheme) return srcUri.toString();
-
-      final base = Uri.tryParse(baseUrl);
-      if (base == null) return null;
-      return base.resolveUri(srcUri).toString();
+  /// Extract hero image from document
+  String? _extractHeroImage(dom.Document doc) {
+    final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+    if (ogImage != null && ogImage.trim().isNotEmpty && _isGoodImage(ogImage)) {
+      return _resolveImageUrl(ogImage.trim());
     }
 
-    bool looksLikeJunk(String url) {
-      final lower = url.toLowerCase();
-      if (lower.startsWith('data:')) return true;
-      if (lower.endsWith('.svg') || lower.endsWith('.gif')) return true;
-      const junkHints = <String>[
-        'logo',
-        'icon',
-        'avatar',
-        'sprite',
-        'pixel',
-        'spacer',
-        'placeholder',
-        'badge',
-        'ads',
-        'ad-',
-        'banner',
-        'tracking',
-      ];
-      return junkHints.any((h) => lower.contains(h));
+    final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+    if (twitterImage != null && twitterImage.trim().isNotEmpty && _isGoodImage(twitterImage)) {
+      return _resolveImageUrl(twitterImage.trim());
     }
 
-    bool hasAcceptableSize(dom.Element img) {
-      int? parseDim(String? raw) => int.tryParse(raw ?? '');
-      final w = parseDim(img.attributes['width']);
-      final h = parseDim(img.attributes['height']);
-
-      const minSize = 200;
-      if (w == null && h == null) return true;
-      if (w != null && w < minSize) return false;
-      if (h != null && h < minSize) return false;
-      return true;
+    final schemaImage = doc.querySelector('meta[itemprop="image"]')?.attributes['content'];
+    if (schemaImage != null && schemaImage.trim().isNotEmpty && _isGoodImage(schemaImage)) {
+      return _resolveImageUrl(schemaImage.trim());
     }
 
-    String? pickCandidate(Iterable<dom.Element> candidates) {
-      for (final el in candidates) {
-        final resolved = resolve(el.attributes['src']);
-        if (resolved == null) continue;
-        if (looksLikeJunk(resolved)) continue;
-        if (!hasAcceptableSize(el)) continue;
-        return resolved;
+    final images = doc.querySelectorAll('img');
+    String? bestImage;
+    var bestSize = 0;
+
+    for (final img in images) {
+      final src = img.attributes['src'] ?? img.attributes['data-src'];
+      if (src == null || !_isGoodImage(src)) continue;
+
+      final width = int.tryParse(img.attributes['width'] ?? '') ?? 0;
+      final height = int.tryParse(img.attributes['height'] ?? '') ?? 0;
+      final size = width * height;
+
+      final parent = img.parent?.localName ?? '';
+      final isFigure = parent == 'figure' || img.className.contains('wp-block-image');
+      
+      if (size > bestSize || (isFigure && size > 10000)) {
+        bestSize = size;
+        bestImage = src;
       }
-      return null;
     }
 
-// 1) <figure> images inside the article
-    // These are the most likely to be the main content images.
-     if (articleRoot != null) {
-      final figureImgs = articleRoot.querySelectorAll('figure img');
-      final resolvedFigure = pickCandidate(figureImgs);
-      if (resolvedFigure != null) return resolvedFigure;
+    return bestImage != null ? _resolveImageUrl(bestImage) : null;
+  }
 
-      // 2) Any inline image inside the article
-      final inlineImgs = articleRoot.querySelectorAll('img');
-      final resolvedInline = pickCandidate(inlineImgs);
-      if (resolvedInline != null) return resolvedInline;
+  /// Extract meta image for metadata
+  String? _extractMetaImage(dom.Document doc) {
+    final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+    if (ogImage != null && ogImage.trim().isNotEmpty) {
+      return _resolveImageUrl(ogImage.trim());
     }
-
-    // 3) Metadata-defined hero (Open Graph / Twitter)
-    final ogImage =
-        doc.querySelector('meta[property="og:image"]')?.attributes['content'];
-    final resolvedOg = resolve(ogImage);
-    if (resolvedOg != null && !looksLikeJunk(resolvedOg)) {
-      return resolvedOg;
+    
+    final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+    if (twitterImage != null && twitterImage.trim().isNotEmpty) {
+      return _resolveImageUrl(twitterImage.trim());
     }
-    final twitterImage =
-        doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
-    final resolvedTwitter = resolve(twitterImage);
-    if (resolvedTwitter != null && !looksLikeJunk(resolvedTwitter)) {
-      return resolvedTwitter;
-    }
+    
     return null;
   }
 
-  // ---------------------------------------------------------------------------
-  // Whitespace normalization
-  // ---------------------------------------------------------------------------
+  /// Check if an image URL looks good (not junk)
+  bool _isGoodImage(String url) {
+    final lower = url.toLowerCase();
+    
+    if (lower.startsWith('data:') || lower.endsWith('.svg') || lower.endsWith('.gif')) {
+      return false;
+    }
+    
+    const junkPatterns = [
+      'logo',
+      'icon',
+      'avatar',
+      'sprite',
+      'pixel',
+      'spacer',
+      'placeholder',
+      'badge',
+      'ads',
+      'ad-',
+      'banner',
+      'tracking',
+      'loader',
+      'spinner',
+      'thumbnail',
+      'thumb_',
+      'favicon',
+    ];
+    
+    for (final pattern in junkPatterns) {
+      if (lower.contains(pattern)) {
+        return false;
+      }
+    }
+    
+    return true;
+  }
 
+  /// Resolve relative image URLs to absolute URLs
+  String? _resolveImageUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return null;
+    
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return null;
+    
+    if (uri.hasScheme) return uri.toString();
+    
+    return url;
+  }
+
+  /// Normalize whitespace in text
   String _normalizeWhitespace(String raw) {
     final lines = raw
         .split('\n')
@@ -365,10 +960,62 @@ class Readability4JExtended {
     return lines.join('\n\n');
   }
 
-  String? _fallbackBodyText(dom.Document doc) {
+  /// Extract fallback text from document
+  String? _extractFallbackText(dom.Document doc) {
+    final likelyContainers = doc.querySelectorAll('div').where((div) {
+      final text = div.text?.trim() ?? '';
+      return text.length > 500;
+    }).toList();
+    
+    if (likelyContainers.isNotEmpty) {
+      final bestContainer = likelyContainers.reduce((a, b) => 
+          (a.text?.length ?? 0) > (b.text?.length ?? 0) ? a : b);
+      final text = _extractMainText(bestContainer);
+      return _normalizeWhitespace(text);
+    }
+    
     final bodyText = doc.body?.text ?? '';
     final normalized = _normalizeWhitespace(bodyText);
-    // Avoid returning extremely short or obviously empty content.
+    
     return normalized.length < 120 ? null : normalized;
   }
+
+  /// Batch extract multiple articles
+  Future<List<ArticleReadabilityResult?>> extractArticles(List<String> urls) async {
+    final results = <ArticleReadabilityResult?>[];
+    
+    for (final url in urls) {
+      try {
+        final result = await extractMainContent(url);
+        results.add(result);
+      } catch (_) {
+        results.add(null);
+      }
+      
+      await Future.delayed(_config.requestDelay);
+    }
+    
+    return results;
+  }
+}
+
+/// Helper function to create a generic readability extractor
+Readability4JExtended createReadabilityExtractor({
+  Map<String, String>? cookies,
+  Map<String, String>? customHeaders,
+  bool useMobileUserAgent = false,
+  Duration requestDelay = const Duration(seconds: 2),
+  http.Client? client,
+}) {
+  final config = ReadabilityConfig(
+    cookies: cookies,
+    customHeaders: customHeaders,
+    useMobileUserAgent: useMobileUserAgent,
+    requestDelay: requestDelay,
+  );
+
+  return Readability4JExtended(
+    client: client,
+    config: config,
+  );
 }
