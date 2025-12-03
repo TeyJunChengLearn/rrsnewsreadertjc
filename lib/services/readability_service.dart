@@ -32,19 +32,19 @@ class ArticleReadabilityResult {
 class Readability4JExtended {
   final http.Client _client;
 
-  Readability4JExtended({http.Client? client})
-      : _client = client ?? http.Client();
+  Readability4JExtended({http.Client? client}) : _client = client ?? http.Client();
 
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
+      final headers = <String, String>{
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      };
       final resp = await _client.get(
         Uri.parse(url),
-        headers: const {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-        },
+        headers: headers,
       );
 
       if (resp.statusCode != 200) return null;
@@ -68,8 +68,8 @@ class Readability4JExtended {
         return null;
       }
 
-      final heroImage =
-          articleRoot != null ? _extractLeadImage(doc, articleRoot, url) : null;
+      final heroImage = _extractLeadImage(doc, articleRoot, url);
+
 
       final result = ArticleReadabilityResult(
         mainText: normalized,
@@ -82,7 +82,23 @@ class Readability4JExtended {
       return null;
     }
   }
+  Future<Map<String, String>> _buildRequestHeaders(String url) async {
+    final headers = <String, String>{
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml',
+    };
 
+    if (cookieHeaderBuilder != null) {
+      final cookie = await cookieHeaderBuilder!(Uri.parse(url));
+      if (cookie != null && cookie.trim().isNotEmpty) {
+        headers['Cookie'] = cookie.trim();
+      }
+    }
+
+    return headers;
+  }
   // ---------------------------------------------------------------------------
   // DOM cleaning
   // ---------------------------------------------------------------------------
@@ -256,7 +272,7 @@ class Readability4JExtended {
 
   String? _extractLeadImage(
     dom.Document doc,
-    dom.Element articleRoot,
+    dom.Element? articleRoot,
     String baseUrl,
   ) {
     String? resolve(String? src) {
@@ -316,14 +332,16 @@ class Readability4JExtended {
 
 // 1) <figure> images inside the article
     // These are the most likely to be the main content images.
-    final figureImgs = articleRoot.querySelectorAll('figure img');
-    final resolvedFigure = pickCandidate(figureImgs);
-    if (resolvedFigure != null) return resolvedFigure;
+     if (articleRoot != null) {
+      final figureImgs = articleRoot.querySelectorAll('figure img');
+      final resolvedFigure = pickCandidate(figureImgs);
+      if (resolvedFigure != null) return resolvedFigure;
 
-    // 2) Any inline image inside the article
-    final inlineImgs = articleRoot.querySelectorAll('img');
-    final resolvedInline = pickCandidate(inlineImgs);
-    if (resolvedInline != null) return resolvedInline;
+      // 2) Any inline image inside the article
+      final inlineImgs = articleRoot.querySelectorAll('img');
+      final resolvedInline = pickCandidate(inlineImgs);
+      if (resolvedInline != null) return resolvedInline;
+    }
 
     // 3) Metadata-defined hero (Open Graph / Twitter)
     final ogImage =
