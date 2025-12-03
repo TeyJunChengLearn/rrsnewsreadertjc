@@ -44,3 +44,18 @@ final readability = Readability4JExtended(
 This mechanism is global—any supported site can be fetched if the cookie is
 valid. The service does **not** bypass paywalls; you must supply your own
 subscriber cookies in accordance with the site’s terms.
+
+## Troubleshooting
+
+If you see build failures mentioning `webview_cookie_manager` (for example,
+errors about `PluginRegistry.Registrar`), the project no longer uses that
+plugin. Clear stale artifacts and refresh dependencies:
+
+```sh
+flutter clean
+flutter pub cache repair
+flutter pub get
+```
+
+These commands remove cached plugin code so the app builds with the in-app
+cookie bridge instead.
