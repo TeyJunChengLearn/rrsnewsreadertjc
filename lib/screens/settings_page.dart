@@ -64,6 +64,12 @@ class SettingsPage extends StatelessWidget {
           () => d.targetLangCode,
         ]) ??
         'off';
+  final ttsSpeechRate = _firstDouble([
+          () => d.ttsSpeechRate,
+          () => d.speechRate,
+          () => d.voiceSpeed,
+        ]) ??
+        0.5;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -214,7 +220,90 @@ class SettingsPage extends StatelessWidget {
 
           const SizedBox(height: 24),
           const Divider(height: 32),
+          _sectionHeader(context, 'Text-to-speech'),
 
+          ListTile(
+            leading: const Icon(Icons.speed),
+            title: const Text('Voice speed'),
+            subtitle: Text('${ttsSpeechRate.toStringAsFixed(2)}x'),
+            onTap: () async {
+              double temp = ttsSpeechRate;
+
+              await showModalBottomSheet<void>(
+                context: context,
+                showDragHandle: true,
+                builder: (context) {
+                  return StatefulBuilder(
+                    builder: (context, setSheetState) {
+                      return Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Voice speed',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('0.3x'),
+                                Text('${temp.toStringAsFixed(2)}x'),
+                                const Text('1.2x'),
+                              ],
+                            ),
+                            Slider(
+                              min: 0.3,
+                              max: 1.2,
+                              divisions: 9,
+                              value: temp.clamp(0.3, 1.2),
+                              label: '${temp.toStringAsFixed(2)}x',
+                              onChanged: (v) {
+                                setSheetState(() {
+                                  temp = double.parse(v.toStringAsFixed(2));
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Adjusts the spoken speed for articles, including Reader mode.',
+                              style: TextStyle(color: Colors.black54),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  child: const Text('Cancel'),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    _tryCall(d, () => d.setTtsSpeechRate(temp));
+                                    Navigator.of(context).pop();
+                                  },
+                                  child: const Text('Save'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+
+          const SizedBox(height: 24),
+          const Divider(height: 32),
           // ================== TRANSLATION =================
           _sectionHeader(context, 'Translation'),
 
@@ -435,7 +524,8 @@ int? _firstInt(List<int Function()> getters) => _first<int>(getters);
 bool? _firstBool(List<bool Function()> getters) => _first<bool>(getters);
 String? _firstString(List<String Function()> getters) =>
     _first<String>(getters);
-
+double? _firstDouble(List<double Function()> getters) =>
+    _first<double>(getters);
 /// Try to call a void method. Returns true if call succeeded (didn't throw).
 bool _tryCall(dynamic _, void Function() fn) {
   try {

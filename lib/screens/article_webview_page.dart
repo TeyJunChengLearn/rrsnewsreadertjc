@@ -241,7 +241,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
   bool _hasInternalPageInHistory = false;
-
+  SettingsProvider? _settings;
+  VoidCallback? _settingsListener;
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
 
@@ -288,13 +289,31 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         setState(() => _isPlaying = false);
       }
     });
+     _attachSettingsListener();
     unawaited(_initNotifications());
     // Preload Readability text in background so TTS/translate work in both modes
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ensureLinesLoaded();
     });
   }
+ void _attachSettingsListener() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _settings = context.read<SettingsProvider>();
+      _settingsListener = () {
+        _applySpeechRateFromSettings();
+      };
+      _applySpeechRateFromSettings();
+      _settings?.addListener(_settingsListener!);
+    });
+  }
 
+  void _applySpeechRateFromSettings() {
+    final settings = _settings ?? context.read<SettingsProvider>();
+    _settings ??= settings;
+    final rate = settings.ttsSpeechRate;
+    _tts.setSpeechRate(rate);
+  }
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   Future<void> _applyTtsLocale(String bcpCode) async {
@@ -786,6 +805,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _webHighlightText = null;
     });
     await _showReadingNotification(text);
+    _applySpeechRateFromSettings();
     await _tts.stop();
     await _tts.speak(text);
   }
@@ -898,6 +918,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   @override
   void dispose() {
+    if (_settingsListener != null && _settings != null) {
+      _settings!.removeListener(_settingsListener!);
+    }
     _tts.stop();
     unawaited(_clearReadingNotification());
     super.dispose();
