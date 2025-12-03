@@ -1,4 +1,5 @@
 import 'package:html/dom.dart' as dom;
+import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:webview_cookie_manager/webview_cookie_manager.dart';
