@@ -377,3 +377,34 @@ class Readability4JExtended {
     return normalized.length < 120 ? null : normalized;
   }
 }
+class WebViewCookieHeaderLoader {
+  final WebviewCookieManager _manager = WebviewCookieManager();
+
+  Future<String?> buildHeader(String url) async {
+    // The WebView cookie manager is only meaningful on mobile platforms. Avoid
+    // invoking it on unsupported targets (web/desktop) to prevent missing
+    // plugin exceptions and simply proceed without cookies instead.
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return null;
+    }
+
+    try {
+      final cookies = await _manager.getCookies(url);
+      if (cookies.isEmpty) return null;
+
+      final pairs = cookies
+          .where((c) => (c.name ?? '').isNotEmpty)
+          .map((c) => '${c.name}=${c.value}')
+          .where((pair) => pair.trim().isNotEmpty)
+          .join('; ');
+
+      return pairs.isEmpty ? null : pairs;
+    } catch (_) {
+      // If reading cookies fails (e.g. platform doesn't support it),
+      // return null so the caller proceeds without authentication.
+      return null;
+    }
+  }
+}

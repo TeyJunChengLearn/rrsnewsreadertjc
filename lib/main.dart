@@ -55,7 +55,7 @@ class AppBootstrap extends StatelessWidget {
             cookieHeaderBuilder:
                 readability.WebViewCookieHeaderLoader().buildHeader,
           ),
-
+        ),
         ProxyProvider2<readability.Readability4JExtended, ArticleDao,
             ArticleContentService>(
           update: (_, readabilityService, articleDao, __) => ArticleContentService(
