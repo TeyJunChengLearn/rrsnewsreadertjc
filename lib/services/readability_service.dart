@@ -31,21 +31,14 @@ class ArticleReadabilityResult {
 /// read "article-like" content, never the whole noisy page.
 class Readability4JExtended {
   final http.Client _client;
-
-  Readability4JExtended({http.Client? client}) : _client = client ?? http.Client();
+  final Future<String?> Function(Uri url)? cookieHeaderBuilder;
+  Readability4JExtended({http.Client? client, this.cookieHeaderBuilder})
+      : _client = client ?? http.Client();
 
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
-      final headers = <String, String>{
-        'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-      };
-      final resp = await _client.get(
-        Uri.parse(url),
-        headers: headers,
-      );
+       final headers = await _buildRequestHeaders(url);
+      final resp = await _client.get(Uri.parse(url), headers: headers);
 
       if (resp.statusCode != 200) return null;
 
