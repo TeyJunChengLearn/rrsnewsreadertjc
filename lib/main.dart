@@ -1,7 +1,7 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+
 
 import 'providers/settings_provider.dart';
 import 'providers/rss_provider.dart';
@@ -11,6 +11,7 @@ import 'services/article_dao.dart';
 import 'services/feed_source_dao.dart';
 import 'services/readability_service.dart';
 import 'services/article_content_service.dart';
+import 'services/cookie_bridge.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -19,7 +20,7 @@ import 'services/rss_service.dart';
 import 'data/feed_repository.dart';
 import 'screens/root_shell.dart';
 
-void main() {
+Future<void> main() async{
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const AppBootstrap());
 }
@@ -53,19 +54,12 @@ class AppBootstrap extends StatelessWidget {
         ),
         Provider<Readability4JExtended>(
           create: (_) {
-            final cookieManager = WebViewCookieManager();
+           final cookieBridge = CookieBridge();
             return Readability4JExtended(
               // Reuse in-app login cookies when pulling reader content
               cookieHeaderBuilder: (url) async {
-                try {
-                  final cookies = await cookieManager.getCookies(url);
-                  if (cookies.isEmpty) return null;
-                  return cookies
-                      .map((c) => '${c.name}=${c.value}')
-                      .join('; ');
-                } catch (_) {
-                  return null;
-                }
+                final cookieHeader = await cookieBridge.buildHeader(url);
+                return cookieHeader;
               },
             );
           },
