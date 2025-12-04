@@ -57,6 +57,28 @@ void main() {
       expect(capturedCookie, 'session=abc123');
     });
 
+    test('createReadabilityExtractor wires cookie builder into requests',
+        () async {
+      String? capturedCookie;
+
+      final client = MockClient((request) async {
+        capturedCookie = request.headers['Cookie'];
+        return http.Response(
+          '<html><body><article><p>Full text</p></article></body></html>',
+          200,
+        );
+      });
+
+      final readability = createReadabilityExtractor(
+        client: client,
+        cookieHeaderBuilder: (_) async => 'auth=subscriber',
+      );
+
+      await readability.extractMainContent('https://paywalled.example.com');
+
+      expect(capturedCookie, 'auth=subscriber');
+    });
+
     test('falls back to metadata image when article root is missing', () async {
       const html = '''
        <html>
@@ -149,6 +171,58 @@ void main() {
       // That's okay as long as cookies were applied
     });
 
+    test('reuses cookie when following pagination links', () async {
+      final seenCookies = <String>[];
+
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        seenCookies.add(request.headers['Cookie'] ?? '');
+
+        if (path.endsWith('/page1')) {
+          return http.Response(
+            '''
+            <html>
+              <body>
+                <article>
+                  <p>First page body.</p>
+                </article>
+                <a href="https://example.com/page2">Next</a>
+              </body>
+            </html>
+            ''',
+            200,
+          );
+        }
+
+        return http.Response(
+          '''
+          <html>
+            <body>
+              <article>
+                <p>Second page body.</p>
+              </article>
+            </body>
+          </html>
+          ''',
+          200,
+        );
+      });
+
+      final readability = Readability4JExtended(
+        client: client,
+        cookieHeaderBuilder: (_) async => 'session=abc123',
+        config: ReadabilityConfig(paginationPageLimit: 2),
+      );
+
+      final result = await readability.extractMainContent(
+        'https://example.com/page1',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.mainText, contains('First page body.'));
+      expect(result.mainText, contains('Second page body.'));
+      expect(seenCookies, everyElement(equals('session=abc123')));
+    });
     test('detects paywall when keywords present', () async {
       const html = '''
         <html>

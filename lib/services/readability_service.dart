@@ -650,7 +650,7 @@ class Readability4JExtended {
   }) async {
     final headers = <String, String>{
       'User-Agent': mobile
-          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+          ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
           : _config.userAgent,
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1372,6 +1372,7 @@ class Readability4JExtended {
 Readability4JExtended createReadabilityExtractor({
   Map<String, String>? cookies,
   Map<String, String>? customHeaders,
+  Future<String?> Function(String url)? cookieHeaderBuilder,
   bool useMobileUserAgent = false,
   Duration requestDelay = const Duration(seconds: 2),
   Duration pageLoadDelay = Duration.zero,
@@ -1390,5 +1391,6 @@ Readability4JExtended createReadabilityExtractor({
   return Readability4JExtended(
     client: client,
     config: config,
+    cookieHeaderBuilder: cookieHeaderBuilder,
   );
 }

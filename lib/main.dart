@@ -61,6 +61,7 @@ class AppBootstrap extends StatelessWidget {
             return Readability4JExtended(
               config: ReadabilityConfig(
                 pageLoadDelay: const Duration(seconds: 5),
+                useMobileUserAgent: true,
               ),
               // Reuse in-app login cookies when pulling reader content
               cookieHeaderBuilder: (url) async {
