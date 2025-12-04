@@ -763,7 +763,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     } catch (_) {
       result = null;
     }
-    if ((result == null || _looksLikePreview(result)) && !_triedDomExtraction) {
+    final rssOnly = (result?.source ?? '').toUpperCase() == 'RSS';
+
+    if ((result == null || _looksLikePreview(result) || rssOnly) &&
+        !_triedDomExtraction) {
       _triedDomExtraction = true;
       final domResult = await _extractFromWebViewDom();
       if (domResult != null && (domResult.mainText?.trim().isNotEmpty ?? false)) {
