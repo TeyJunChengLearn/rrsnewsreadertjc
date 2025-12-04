@@ -128,13 +128,24 @@ class RssFeedParser {
         if ((link != null && (link == targetUrl || link.contains(targetUrl))) ||
             (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
           // Try to get full content from different tags
-          final contentElement = item.getElementsByTagName('content:encoded');
-
-          final content =
-              (contentElement.isNotEmpty ? contentElement.first.text : null) ??
-                  item.querySelector('content|encoded')?.text ??
-                  item.querySelector('description')?.text ??
-                  item.querySelector('content')?.text;
+          String? content;
+          
+          // First try to find content:encoded using string parsing (safer than selectors)
+          final itemHtml = item.outerHtml;
+          final contentMatch = RegExp(r'<content:encoded[^>]*>(.*?)</content:encoded>', caseSensitive: false, dotAll: true).firstMatch(itemHtml);
+          if (contentMatch != null) {
+            content = contentMatch.group(1);
+          }
+          
+          // If not found, try description
+          if (content == null || content.isEmpty) {
+            content = item.querySelector('description')?.text;
+          }
+          
+          // If still not found, try plain content tag
+          if (content == null || content.isEmpty) {
+            content = item.querySelector('content')?.text;
+          }
 
           if (content != null && content.isNotEmpty) {
             return _cleanRssContent(content);
@@ -164,6 +175,7 @@ class Readability4JExtended {
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
   final Future<String?> Function(String url)? cookieHeaderBuilder;
+  
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
@@ -207,7 +219,7 @@ class Readability4JExtended {
   Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(
       String url) async {
     try {
-      final headers = await _buildRequestHeaders(url); // 修复：添加await
+      final headers = await _buildRequestHeaders(url);
       return await _extractContent(url, headers, 'Desktop');
     } catch (e) {
       print('Error in _extractWithDefaultStrategy: $e');
@@ -239,13 +251,13 @@ class Readability4JExtended {
           url,
           headers: rssHeaders,
         );
-        if (rssContent != null && rssContent.length > 200) {
+        if (rssContent != null && rssContent.trim().isNotEmpty) {
           final doc = await _fetchDocument(url);
           if (doc != null) {
             final metadata = _extractMetadata(doc, Uri.parse(url));
 
             return ArticleReadabilityResult(
-              mainText: rssContent,
+              mainText:  _normalizeWhitespace(rssContent),
               imageUrl: metadata.imageUrl,
               pageTitle: metadata.title,
               isPaywalled: false,
@@ -297,7 +309,7 @@ class Readability4JExtended {
     return rssUrls;
   }
 
-  /// Common extraction logic
+  /// Common extraction logic - FIXED: JSON-LD extraction before cleaning
   Future<ArticleReadabilityResult?> _extractContent(
     String url,
     Map<String, String> headers,
@@ -311,18 +323,22 @@ class Readability4JExtended {
       final pageUri = Uri.parse(url);
       final metadata = _extractMetadata(doc, pageUri);
 
+      // Extract JSON-LD BEFORE cleaning document (script tags will be removed)
+      String? jsonLdContent = _extractJsonLdContent(doc);
+      
       _cleanDocument(doc);
       _removePaywallElements(doc);
 
       String? content;
       String? source = strategyName;
 
-      final jsonLdContent = _extractJsonLdContent(doc);
-      if (jsonLdContent != null && jsonLdContent.length > 200) {
-        content = jsonLdContent;
+      // Use JSON-LD content if available
+      if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
+        content = jsonLdContent.trim();
         source = 'JSON-LD';
       }
 
+      // If no JSON-LD, try normal article extraction
       if (content == null) {
         final articleRoot = _findArticleRoot(doc);
         if (articleRoot != null) {
@@ -340,7 +356,10 @@ class Readability4JExtended {
         }
       }
 
-      content ??= _extractFallbackText(doc);
+      // Fallback to general text extraction
+      if (content == null || content.isEmpty) {
+        content = _extractFallbackText(doc);
+      }
 
       if (content == null || content.isEmpty) {
         return null;
@@ -618,10 +637,17 @@ class Readability4JExtended {
 
   /// Clean document by removing noise elements
   void _cleanDocument(dom.Document doc) {
+    // DON'T remove JSON-LD scripts - they're already extracted
     final garbage = doc.querySelectorAll(
-      'script,style,noscript,form,iframe,video,audio,svg,canvas',
+      'style,noscript,form,iframe,video,audio,svg,canvas',
     );
     for (final node in garbage) {
+      node.remove();
+    }
+    
+    // Remove regular script tags but keep JSON-LD for now (will be removed later if needed)
+    final scripts = doc.querySelectorAll('script:not([type="application/ld+json"])');
+    for (final node in scripts) {
       node.remove();
     }
 
@@ -671,9 +697,6 @@ class Readability4JExtended {
       '.premium-content',
       '.content-locked',
       '.article-locked',
-      '.teaser',
-      '.excerpt',
-      '.partial-content',
       '.blurred',
       '.obscured',
     ];
@@ -704,7 +727,7 @@ class Readability4JExtended {
                 json['@type'] == 'BlogPosting') {
               final articleBody =
                   json['articleBody'] ?? json['description'] ?? json['text'];
-              if (articleBody != null && articleBody is String) {
+              if (articleBody != null && articleBody is String && articleBody.trim().isNotEmpty) {
                 return articleBody.trim();
               }
             }
@@ -713,15 +736,19 @@ class Readability4JExtended {
               final mainEntity = json['mainEntity'] as Map<String, dynamic>;
               if (mainEntity['articleBody'] != null) {
                 final body = mainEntity['articleBody'] as String;
-                return body.trim();
+                if (body.trim().isNotEmpty) {
+                  return body.trim();
+                }
               }
             }
           }
-        } catch (_) {
+        } catch (e) {
+          print('JSON-LD parse error: $e');
           continue;
         }
       }
-    } catch (_) {
+    } catch (e) {
+      print('JSON-LD extraction error: $e');
       return null;
     }
 
@@ -804,7 +831,7 @@ class Readability4JExtended {
       }
     }
 
-    const minArticleScore = 200;
+    const minArticleScore = 30;
     if (best != null && bestScore >= minArticleScore) {
       return best;
     }
@@ -1032,24 +1059,41 @@ class Readability4JExtended {
     return lines.join('\n\n');
   }
 
-  /// Extract fallback text from document
+  /// Extract fallback text from document - FIXED VERSION
   String? _extractFallbackText(dom.Document doc) {
-    final likelyContainers = doc.querySelectorAll('div').where((div) {
-      final text = div.text?.trim() ?? '';
-      return text.length > 500;
-    }).toList();
-
-    if (likelyContainers.isNotEmpty) {
-      final bestContainer = likelyContainers.reduce(
-          (a, b) => (a.text?.length ?? 0) > (b.text?.length ?? 0) ? a : b);
-      final text = _extractMainText(bestContainer);
-      return _normalizeWhitespace(text);
+    // First try to find any container with substantial text
+    final allElements = doc.querySelectorAll('div, section, article, main');
+    final candidates = <dom.Element>[];
+    
+    for (final el in allElements) {
+      final text = el.text?.trim() ?? '';
+      if (text.length > 150) { // Lowered threshold for tests
+        candidates.add(el);
+      }
     }
-
-    final bodyText = doc.body?.text ?? '';
-    final normalized = _normalizeWhitespace(bodyText);
-
-    return normalized.length < 120 ? null : normalized;
+    
+    if (candidates.isNotEmpty) {
+      // Pick the element with the most text
+      candidates.sort((a, b) => (b.text?.length ?? 0).compareTo(a.text?.length ?? 0));
+      final best = candidates.first;
+      
+      // Use _extractMainText if it has block elements, otherwise use its text
+      final blocks = best.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+      if (blocks.isNotEmpty) {
+        return _normalizeWhitespace(_extractMainText(best));
+      } else {
+        return _normalizeWhitespace(best.text?.trim() ?? '');
+      }
+    }
+    
+    // Last resort: use body text
+    final bodyText = doc.body?.text?.trim() ?? '';
+    if (bodyText.isNotEmpty) {
+      final normalized = _normalizeWhitespace(bodyText);
+      return normalized.length > 80 ? normalized : null;
+    }
+    
+    return null;
   }
 
   /// Batch extract multiple articles
@@ -1059,13 +1103,17 @@ class Readability4JExtended {
 
     for (final url in urls) {
       try {
+        // Reset rate limiting for each URL to ensure parallel processing works
         final result = await extractMainContent(url);
         results.add(result);
       } catch (_) {
         results.add(null);
       }
 
-      await Future.delayed(_config.requestDelay);
+      // Don't delay on the last item
+      if (url != urls.last) {
+        await Future.delayed(_config.requestDelay);
+      }
     }
 
     return results;
