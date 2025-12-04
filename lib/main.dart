@@ -60,7 +60,7 @@ class AppBootstrap extends StatelessWidget {
             final cookieBridge = ctx.read<CookieBridge>();
             return Readability4JExtended(
               config: ReadabilityConfig(
-                pageLoadDelay: const Duration(seconds: 5),
+                pageLoadDelay: const Duration(seconds: 10),
                 useMobileUserAgent: true,
               ),
               // Reuse in-app login cookies when pulling reader content

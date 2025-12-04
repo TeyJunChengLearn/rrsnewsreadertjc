@@ -1,7 +1,10 @@
 // lib/screens/site_login_page.dart
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../services/cookie_bridge.dart';
 
 class SiteLoginPage extends StatefulWidget {
   final String initialUrl;
@@ -35,24 +38,53 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
       ..loadRequest(Uri.parse(widget.initialUrl));
   }
 
-Future<void> _openInBrowser() async {
-  final uri = Uri.parse(widget.initialUrl);
-  try {
-    final ok = await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-    );
-    if (!ok) {
+  Future<void> _submitCookies() async {
+    final bridge = context.read<CookieBridge>();
+    final currentUrl = await _controller.currentUrl();
+
+    if (currentUrl == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No browser available to open link')),
+        const SnackBar(content: Text('Unable to determine current page for cookies')),
+      );
+      return;
+    }
+
+    final cookies = await bridge.submitCookies(currentUrl);
+
+    if (!mounted) return;
+    if (cookies == null || cookies.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No cookies detected yet')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Login cookies saved for this site')),
+    );
+
+    Navigator.of(context).maybePop();
+  }
+
+  Future<void> _openInBrowser() async {
+    final uri = Uri.parse(widget.initialUrl);
+    try {
+      final ok = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No browser available to open link')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to open browser')),
       );
     }
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Failed to open browser')),
-    );
   }
-}
 
 
   @override
@@ -61,6 +93,11 @@ Future<void> _openInBrowser() async {
       appBar: AppBar(
         title: Text('Sign in to ${widget.siteName}'),
         actions: [
+          IconButton(
+            tooltip: 'Use these cookies',
+            icon: const Icon(Icons.cookie_outlined),
+            onPressed: _submitCookies,
+          ),
           IconButton(
             tooltip: 'Open in browser',
             icon: const Icon(Icons.open_in_browser),
