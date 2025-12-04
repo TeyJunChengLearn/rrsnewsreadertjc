@@ -24,6 +24,18 @@ valid session cookies for the site you already have access to. Configure a
 `Readability4JExtended` so each request includes the correct authentication
 cookie for that domain.
 
+### Quick steps (works for any paywalled news site)
+1. Add the feed as usual.
+2. When prompted **"Does this news feed require a login account?"** tap **Yes**.
+   The in-app webview opens the site so you can sign in with your own
+   subscription account.
+3. After signing in, go back to the feed and reload/extract again. The
+   readability service will automatically reuse the cookies collected by the
+   webview for every article URL from that domain.
+
+If you prefer to wire cookies manually (e.g., for testing), you can also supply
+them per host:
+
 Example (per-URL cookies):
 
 ```dart
