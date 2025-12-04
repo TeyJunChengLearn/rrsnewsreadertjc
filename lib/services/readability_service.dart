@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
+import 'package:xml/xml.dart';
 
 /// Result of readability extraction: main article text + optional hero image.
 class ArticleReadabilityResult {
@@ -51,7 +53,24 @@ class _Metadata {
     this.imageUrl,
   });
 }
+/// Represents an RSS item's rich content to be merged into readability results.
+class _RssItemContent {
+  final String text;
+  final String? imageUrl;
+  final String? title;
+  final String? author;
+  final DateTime? publishedDate;
 
+  const _RssItemContent({
+    required this.text,
+    this.imageUrl,
+    this.title,
+    this.author,
+    this.publishedDate,
+  });
+
+  bool get hasContent => text.trim().isNotEmpty;
+}
 /// Configuration for the readability service - FIXED CONSTRUCTOR
 class ReadabilityConfig {
   final Map<String, String>? cookies;
@@ -109,8 +128,8 @@ class RssFeedParser {
 
   RssFeedParser({http.Client? client}) : _client = client ?? http.Client();
 
-  /// Extract article content from RSS feed
-  Future<String?> extractFromRss(
+/// Extract article content and metadata from an RSS feed.
+  Future<_RssItemContent?> extractFromRss(
     String rssUrl,
     String targetUrl, {
     Map<String, String>? headers,
@@ -122,43 +141,49 @@ class RssFeedParser {
       );
       if (response.statusCode != 200) return null;
 
-      final doc = html_parser.parse(response.body);
-
-      // Look for item with matching link
-      final items = doc.querySelectorAll('item');
-      for (final item in items) {
-        final link = item.querySelector('link')?.text?.trim();
-        final guid = item.querySelector('guid')?.text?.trim();
-
-        if ((link != null && (link == targetUrl || link.contains(targetUrl))) ||
-            (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
-          // Try to get full content from different tags
-          String? content;
-
-          // First try to find content:encoded using string parsing (safer than selectors)
-          final itemHtml = item.outerHtml;
-          final contentMatch = RegExp(
-                  r'<content:encoded[^>]*>(.*?)</content:encoded>',
-                  caseSensitive: false,
-                  dotAll: true)
-              .firstMatch(itemHtml);
-          if (contentMatch != null) {
-            content = contentMatch.group(1);
-          }
+      final xmlDoc = XmlDocument.parse(response.body);
+      final normalizedTarget = _normalizeUrl(targetUrl);
 
           // If not found, try description
-          if (content == null || content.isEmpty) {
-            content = item.querySelector('description')?.text;
-          }
+          for (final item in xmlDoc.findAllElements('item')) {
+        final link = _readText(item, 'link');
+        final guid = _readText(item, 'guid');
+        final origin = _readText(item, 'origLink');
 
-          // If still not found, try plain content tag
-          if (content == null || content.isEmpty) {
-            content = item.querySelector('content')?.text;
-          }
+          final candidateLinks = [link, guid, origin]
+            .where((candidate) => candidate != null)
+            .cast<String>();
 
-          if (content != null && content.isNotEmpty) {
-            return _cleanRssContent(content);
-          }
+          final matched = candidateLinks.any(
+          (candidate) => _matchesTarget(_normalizeUrl(candidate), normalizedTarget),
+        );
+
+        if (!matched) continue;
+
+        final content = _readText(item, 'encoded', namespace: 'content') ??
+            _readText(item, 'content') ??
+            _readText(item, 'description');
+
+        final cleanedText = _cleanRssContent(content);
+
+        // Prefer media content; fall back to enclosure or first image in HTML.
+        final imageUrl = _extractImageUrl(item) ?? _extractImageFromHtml(content);
+
+        final author = _readText(item, 'creator', namespace: 'dc') ??
+            _readText(item, 'author');
+        final pubDate = _parseDate(_readText(item, 'pubDate')) ??
+            _parseDate(_readText(item, 'published'));
+
+        final title = _readText(item, 'title');
+
+        if (cleanedText != null && cleanedText.trim().isNotEmpty) {
+          return _RssItemContent(
+            text: cleanedText,
+            imageUrl: imageUrl,
+            title: title,
+            author: author,
+            publishedDate: pubDate,
+          );
         }
       }
     } catch (e) {
@@ -167,13 +192,106 @@ class RssFeedParser {
     return null;
   }
 
-  String _cleanRssContent(String content) {
-    // Remove CDATA tags if present
-    content = content.replaceAll(RegExp(r'<!\[CDATA\[|\]\]>'), '');
+  String? _readText(XmlElement element, String localName, {String? namespace}) {
+    final matches = element.findElements(localName, namespace: namespace);
+    if (matches.isEmpty) return null;
+    return matches.first.text.trim();
+  }
 
-    // Remove HTML tags, keep text
-    final doc = html_parser.parseFragment(content);
-    return doc.text?.trim() ?? '';
+     bool _matchesTarget(String? candidate, String normalizedTarget) {
+    if (candidate == null || candidate.isEmpty) return false;
+    return candidate == normalizedTarget ||
+        candidate.contains(normalizedTarget) ||
+        normalizedTarget.contains(candidate);
+  }
+
+  String _normalizeUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      final filteredParams = Map<String, String>.fromEntries(
+        uri.queryParameters.entries.where(
+          (entry) =>
+              !entry.key.toLowerCase().startsWith('utm_') &&
+              entry.key.toLowerCase() != 'fbclid',
+        ),
+      );
+
+      final cleanedUri = uri.replace(
+        queryParameters: filteredParams.isEmpty ? null : filteredParams,
+        path: uri.path.endsWith('/') && uri.path.length > 1
+            ? uri.path.substring(0, uri.path.length - 1)
+            : uri.path,
+      );
+
+      return cleanedUri.toString().toLowerCase();
+    } catch (_) {
+      return url.toLowerCase();
+    }
+  }
+
+  String? _cleanRssContent(String? content) {
+    if (content == null) return null;
+
+    final stripped = content.replaceAll(RegExp(r'<!\[CDATA\[|\]\]>'), '');
+    final fragment = html_parser.parseFragment(stripped);
+
+    final paragraphs = fragment.querySelectorAll('p, li, blockquote, pre');
+    if (paragraphs.isEmpty) {
+      return _normalizeWhitespace(fragment.text ?? '');
+    }
+
+    final buffer = StringBuffer();
+    for (final element in paragraphs) {
+      final text = element.text.trim();
+      if (text.isNotEmpty) {
+        if (buffer.isNotEmpty) buffer.write('\n\n');
+        buffer.write(text);
+      }
+    }
+
+    return _normalizeWhitespace(buffer.toString());
+  }
+
+  String? _extractImageUrl(XmlElement item) {
+    final mediaContent = item.findElements('content', namespace: 'media');
+    if (mediaContent.isNotEmpty) {
+      final url = mediaContent.first.getAttribute('url');
+      if (url != null && url.isNotEmpty) return url;
+    }
+
+    final enclosure = item.findElements('enclosure');
+    if (enclosure.isNotEmpty) {
+      final url = enclosure.first.getAttribute('url');
+      final type = enclosure.first.getAttribute('type');
+      if (url != null && (type?.startsWith('image/') ?? true)) {
+        return url;
+      }
+    }
+    return null;
+  }
+
+  String? _extractImageFromHtml(String? html) {
+    if (html == null || html.isEmpty) return null;
+    final fragment = html_parser.parseFragment(html);
+    final img = fragment.querySelector('img');
+    return img?.attributes['src'];
+  }
+
+  DateTime? _parseDate(String? date) {
+    if (date == null) return null;
+    try {
+      return DateTime.parse(date);
+    } catch (_) {
+      try {
+        return HttpDate.parse(date);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  String _normalizeWhitespace(String input) {
+    return input.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 }
 
@@ -260,21 +378,19 @@ class Readability4JExtended {
           url,
           headers: rssHeaders,
         );
-        if (rssContent != null && rssContent.trim().isNotEmpty) {
-          final doc = await _fetchDocument(url);
-          if (doc != null) {
-            final metadata = _extractMetadata(doc, Uri.parse(url));
+        if (rssContent != null && rssContent.hasContent) {
+          final metadata =
+              doc != null ? _extractMetadata(doc, Uri.parse(url)) : null;
 
-            return ArticleReadabilityResult(
-              mainText: _normalizeWhitespace(rssContent),
-              imageUrl: metadata.imageUrl,
-              pageTitle: metadata.title,
-              isPaywalled: false,
-              source: 'RSS',
-              author: metadata.author,
-              publishedDate: metadata.publishedDate,
-            );
-          }
+          return ArticleReadabilityResult(
+            mainText: _normalizeWhitespace(rssContent.text),
+            imageUrl: rssContent.imageUrl ?? metadata?.imageUrl,
+            pageTitle: metadata?.title ?? rssContent.title,
+            isPaywalled: false,
+            source: 'RSS',
+            author: metadata?.author ?? rssContent.author,
+            publishedDate: metadata?.publishedDate ?? rssContent.publishedDate,
+          );
         }
       } catch (_) {
         continue;
@@ -298,6 +414,7 @@ class Readability4JExtended {
       '$baseUrl/rss.xml',
       '$baseUrl/atom.xml',
       '$baseUrl/index.xml',
+      '$baseUrl/?feed=rss',
     ];
 
     if (path.contains('/news/')) {
