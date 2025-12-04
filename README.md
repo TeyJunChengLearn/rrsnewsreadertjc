@@ -71,3 +71,17 @@ flutter pub get
 
 These commands remove cached plugin code so the app builds with the in-app
 cookie bridge instead.
+
+### Cookies don’t seem to stick
+- **Confirm the article is being fetched over HTTP.** If you tap “Open in
+  WebView” and extraction still fails, the app may be pulling HTML from the
+  WebView DOM (no extra fetch), so the bridge is not involved. Try the normal
+  extraction first so the network path runs with cookies.
+- **Check that the site’s host appears in the captured header.** After signing
+  in via the in-app WebView, reload the feed; the readability service will call
+  `cookieHeaderBuilder` with the article URL. Log the returned header to verify
+  the session cookie is present for that host.
+- **Force a manual cookie header if needed.** During debugging you can hardcode
+  a header in `Readability4JExtended(cookieHeaderBuilder: ...)` to confirm the
+  server accepts it. Once verified, remove the hardcoded value so the bridge
+  can supply fresh cookies from the WebView session.

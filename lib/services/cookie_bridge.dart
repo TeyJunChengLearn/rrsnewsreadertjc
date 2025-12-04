@@ -15,7 +15,7 @@ class CookieBridge {
       );
       if (cookie == null || cookie.isEmpty) return null;
       return cookie;
-    }  on Exception  {
+    } on Exception catch (_) {
       return null;
     }
   }
