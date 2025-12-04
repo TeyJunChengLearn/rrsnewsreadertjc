@@ -229,7 +229,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
   int _currentLine = 0;
-
+  bool _triedDomExtraction = false;
   // Hero image from Readability result (used in reader HTML)
   String? _heroImageUrl;
 
@@ -763,7 +763,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     } catch (_) {
       result = null;
     }
-
+    if ((result == null || _looksLikePreview(result)) && !_triedDomExtraction) {
+      _triedDomExtraction = true;
+      final domResult = await _extractFromWebViewDom();
+      if (domResult != null && (domResult.mainText?.trim().isNotEmpty ?? false)) {
+        result = domResult;
+      }
+    }
     if (!mounted) return;
 
     final hasNoText = result == null || (result.mainText?.trim().isEmpty ?? true);
@@ -821,7 +827,65 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _currentLine = 0;
     });
   }
+  bool _looksLikePreview(ArticleReadabilityResult result) {
+    final text = (result.mainText ?? '').trim();
+    if (text.isEmpty) return true;
+    return _isLikelyPreviewText(text, result.isPaywalled ?? false);
+  }
 
+  Future<ArticleReadabilityResult?> _extractFromWebViewDom() async {
+    try {
+      await _waitForPageToSettle();
+      final raw = await _controller.runJavaScriptReturningResult(
+        '(() => document.documentElement.outerHTML)();',
+      );
+
+      if (!mounted) return null;
+
+      final html = _normalizeJsString(raw);
+      if (html == null || html.isEmpty) return null;
+
+      final readability = context.read<Readability4JExtended>();
+      return await readability.extractFromHtml(
+        widget.url,
+        html,
+        strategyName: 'WebView DOM',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _waitForPageToSettle() async {
+    // Wait briefly for the current page load + JS-rendered content to settle.
+    for (var i = 0; i < 5; i++) {
+      if (!_isLoading) break;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+
+    await Future.delayed(const Duration(milliseconds: 200));
+  }
+
+  String? _normalizeJsString(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is String) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is String) return decoded;
+      } catch (_) {
+        // If it's already a plain string (not JSON-wrapped), use as-is.
+      }
+      return raw;
+    }
+
+    try {
+      final decoded = jsonDecode(raw.toString());
+      if (decoded is String) return decoded;
+    } catch (_) {
+      // Fallback to simple string conversion
+    }
+    return raw.toString();
+  }
   Future<void> _speakCurrentLine() async {
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;

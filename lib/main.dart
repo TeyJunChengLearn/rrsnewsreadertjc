@@ -81,10 +81,15 @@ class AppBootstrap extends StatelessWidget {
 
         // LOW LEVEL RSS
         Provider<RssService>(
-          create: (_) => RssService(
-            fetcher: HttpFeedFetcher(),
-            parser: RssAtomParser(),
-          ),
+         create: (ctx) {
+            final cookieBridge = ctx.read<CookieBridge>();
+            return RssService(
+              fetcher: HttpFeedFetcher(
+                cookieHeaderBuilder: cookieBridge.buildHeader,
+              ),
+              parser: RssAtomParser(),
+            );
+          },
         ),
 
         // REPOSITORY = RSS + DB

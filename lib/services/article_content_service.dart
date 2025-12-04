@@ -17,18 +17,25 @@ class ArticleContentService {
 
     for (final item in items) {
       if (item.link.isEmpty) continue;
-      final needsText = (item.mainText ?? '').trim().isEmpty;
+      final existingText = (item.mainText ?? '').trim();
+      final needsBetterText = _looksLikeTeaser(existingText);
       final needsImage = (item.imageUrl ?? '').trim().isEmpty;
-      if (!needsText && !needsImage) continue;
+
+      if (!needsBetterText && !needsImage) continue;
 
       final content = await readability.extractMainContent(item.link);
       if (content == null) continue;
 
       final updates = <String, String?>{};
       final trimmedText = content.mainText?.trim();
-      if (needsText && (trimmedText ?? '').isNotEmpty) {
-        updates['mainText'] = trimmedText;
+      if ((needsBetterText || needsImage) && (trimmedText ?? '').isNotEmpty) {
+        final longerThanExisting =
+            (existingText.isEmpty) || ((trimmedText?.length ?? 0) > existingText.length);
+        if (longerThanExisting || needsBetterText) {
+          updates['mainText'] = trimmedText;
+        }
       }
+
       final leadImage = content.imageUrl?.trim();
       if (needsImage && (leadImage ?? '').isNotEmpty) {
         updates['imageUrl'] = leadImage;
@@ -46,4 +53,29 @@ class ArticleContentService {
 
     return updated;
   }
+}
+
+bool _looksLikeTeaser(String? text) {
+  if (text == null) return true;
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return true;
+
+  if (trimmed.length < 400) return true;
+
+  final lower = trimmed.toLowerCase();
+  const patterns = [
+    'continue reading',
+    'subscribe to read',
+    'to continue reading',
+    'login to read',
+    'premium content',
+  ];
+
+  if (trimmed.endsWith('...') || trimmed.endsWith('…')) return true;
+
+  for (final pattern in patterns) {
+    if (lower.contains(pattern)) return true;
+  }
+
+  return false;
 }

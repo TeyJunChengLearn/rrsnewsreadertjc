@@ -365,7 +365,19 @@ class Readability4JExtended {
       return null;
     }
   }
-
+  /// Extract article content from an existing HTML document (e.g., WebView DOM).
+  Future<ArticleReadabilityResult?> extractFromHtml(
+    String url,
+    String html, {
+    String strategyName = 'DOM',
+  }) async {
+    try {
+      final doc = html_parser.parse(html);
+      return _extractFromDocument(url, doc, strategyName);
+    } catch (_) {
+      return null;
+    }
+  }
   /// Strategy 3: Try RSS feed for news sites
   Future<ArticleReadabilityResult?> _extractFromRssStrategy(String url) async {
     final rssUrls = _generateRssUrls(url);
@@ -440,7 +452,7 @@ class Readability4JExtended {
   }
 
   /// Common extraction logic - FIXED: JSON-LD extraction before cleaning
-  Future<ArticleReadabilityResult?> _extractContent(
+    Future<ArticleReadabilityResult?> _extractContent(
     String url,
     Map<String, String> headers,
     String strategyName,
@@ -449,67 +461,75 @@ class Readability4JExtended {
       final doc = await _fetchDocument(url, headers);
       if (doc == null) return null;
 
-      final isPaywalled = _detectPaywall(doc);
-      final pageUri = Uri.parse(url);
-      final metadata = _extractMetadata(doc, pageUri);
-
-      // Extract JSON-LD BEFORE cleaning document (script tags will be removed)
-      String? jsonLdContent = _extractJsonLdContent(doc);
-
-      _cleanDocument(doc);
-      _removePaywallElements(doc);
-
-      String? content;
-      String? source = strategyName;
-
-      // Use JSON-LD content if available
-      if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
-        content = jsonLdContent.trim();
-        source = 'JSON-LD';
-      }
-
-      // If no JSON-LD, try normal article extraction
-      if (content == null) {
-        final articleRoot = _findArticleRoot(doc);
-        if (articleRoot != null) {
-          final text = _extractMainText(articleRoot);
-          content = _normalizeWhitespace(text);
-
-          if (_isContentTruncated(content)) {
-            final hiddenContent = _extractHiddenContent(articleRoot);
-            if (hiddenContent != null &&
-                hiddenContent.length > content.length) {
-              content = hiddenContent;
-              source = 'Hidden Content';
-            }
-          }
-        }
-      }
-
-      // Fallback to general text extraction
-      if (content == null || content.isEmpty) {
-        content = _extractFallbackText(doc);
-      }
-
-      if (content == null || content.isEmpty) {
-        return null;
-      }
-
-      final heroImage = _extractHeroImage(doc, pageUri);
-
-      return ArticleReadabilityResult(
-        mainText: content,
-        imageUrl: heroImage,
-        pageTitle: metadata.title,
-        isPaywalled: isPaywalled,
-        source: source,
-        author: metadata.author,
-        publishedDate: metadata.publishedDate,
-      );
+      return _extractFromDocument(url, doc, strategyName);
     } catch (_) {
       return null;
     }
   }
+
+  ArticleReadabilityResult? _extractFromDocument(
+    String url,
+    dom.Document doc,
+    String strategyName,
+  ) {
+    final isPaywalled = _detectPaywall(doc);
+    final pageUri = Uri.parse(url);
+    final metadata = _extractMetadata(doc, pageUri);
+
+    // Extract JSON-LD BEFORE cleaning document (script tags will be removed)
+    String? jsonLdContent = _extractJsonLdContent(doc);
+
+    _cleanDocument(doc);
+    _removePaywallElements(doc);
+
+    String? content;
+    String? source = strategyName;
+
+    // Use JSON-LD content if available
+    if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
+      content = jsonLdContent.trim();
+      source = 'JSON-LD';
+    }
+
+    // If no JSON-LD, try normal article extraction
+    if (content == null) {
+      final articleRoot = _findArticleRoot(doc);
+      if (articleRoot != null) {
+        final text = _extractMainText(articleRoot);
+        content = _normalizeWhitespace(text);
+
+        if (_isContentTruncated(content)) {
+          final hiddenContent = _extractHiddenContent(articleRoot);
+          if (hiddenContent != null && hiddenContent.length > content.length) {
+            content = hiddenContent;
+            source = 'Hidden Content';
+          }
+        }
+      }
+    }
+
+    // Fallback to general text extraction
+    if (content == null || content.isEmpty) {
+      content = _extractFallbackText(doc);
+    }
+
+    if (content == null || content.isEmpty) {
+      return null;
+    }
+
+    final heroImage = _extractHeroImage(doc, pageUri);
+
+    return ArticleReadabilityResult(
+      mainText: content,
+      imageUrl: heroImage,
+      pageTitle: metadata.title,
+      isPaywalled: isPaywalled,
+      source: source,
+      author: metadata.author,
+      publishedDate: metadata.publishedDate,
+    );
+  }
+
 
   /// Fetch document with error handling
   Future<dom.Document?> _fetchDocument(
