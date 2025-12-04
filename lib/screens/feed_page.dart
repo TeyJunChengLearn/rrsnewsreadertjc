@@ -187,6 +187,17 @@ class _FeedPageState extends State<FeedPage>
                     final requiresLogin = await _askRequiresLogin();
 
                     // Save source as usual
+                    if (requiresLogin) {
+                      final loginUrl = _guessLoginUrl(url);
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => SiteLoginPage(
+                            initialUrl: loginUrl,
+                            siteName: titleText,
+                          ),
+                        ),
+                      );
+                    }
                     await context.read<RssProvider>().addSource(
                           FeedSource(title: titleText, url: url),
                         );
@@ -199,19 +210,7 @@ class _FeedPageState extends State<FeedPage>
                         content: Text('Added "$titleText"'),
                       ),
                     );
-
-                    // If user said Yes, open login webview for this site
-                    if (requiresLogin) {
-  final loginUrl = _guessLoginUrl(url);
-  await Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => SiteLoginPage(
-        initialUrl: loginUrl,
-        siteName: titleText,
-      ),
-    ),
-  );
-}
+                    
 
                   },
                   child: const Text('Add feed'),

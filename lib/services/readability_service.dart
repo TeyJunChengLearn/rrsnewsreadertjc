@@ -59,15 +59,18 @@ class ReadabilityConfig {
   final List<String> paywallKeywords;
   final bool attemptRssFallback;
   final Duration requestDelay;
+  final Duration pageLoadDelay;
+  final int paginationPageLimit;
   final bool useMobileUserAgent;
   final String userAgent;
-
   ReadabilityConfig({
     Map<String, String>? cookies,
     Map<String, String>? customHeaders,
     List<String>? paywallKeywords,
     bool? attemptRssFallback,
     Duration? requestDelay,
+    Duration? pageLoadDelay,
+    int? paginationPageLimit,
     bool? useMobileUserAgent,
     String? userAgent,
   })  : cookies = cookies,
@@ -92,6 +95,8 @@ class ReadabilityConfig {
             ],
         attemptRssFallback = attemptRssFallback ?? true,
         requestDelay = requestDelay ?? const Duration(seconds: 2),
+        pageLoadDelay = pageLoadDelay ?? Duration.zero,
+         paginationPageLimit = paginationPageLimit ?? 3,
         useMobileUserAgent = useMobileUserAgent ?? false,
         userAgent = userAgent ??
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -129,19 +134,23 @@ class RssFeedParser {
             (guid != null && (guid == targetUrl || guid.contains(targetUrl)))) {
           // Try to get full content from different tags
           String? content;
-          
+
           // First try to find content:encoded using string parsing (safer than selectors)
           final itemHtml = item.outerHtml;
-          final contentMatch = RegExp(r'<content:encoded[^>]*>(.*?)</content:encoded>', caseSensitive: false, dotAll: true).firstMatch(itemHtml);
+          final contentMatch = RegExp(
+                  r'<content:encoded[^>]*>(.*?)</content:encoded>',
+                  caseSensitive: false,
+                  dotAll: true)
+              .firstMatch(itemHtml);
           if (contentMatch != null) {
             content = contentMatch.group(1);
           }
-          
+
           // If not found, try description
           if (content == null || content.isEmpty) {
             content = item.querySelector('description')?.text;
           }
-          
+
           // If still not found, try plain content tag
           if (content == null || content.isEmpty) {
             content = item.querySelector('content')?.text;
@@ -175,7 +184,7 @@ class Readability4JExtended {
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
   final Future<String?> Function(String url)? cookieHeaderBuilder;
-  
+
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
@@ -257,7 +266,7 @@ class Readability4JExtended {
             final metadata = _extractMetadata(doc, Uri.parse(url));
 
             return ArticleReadabilityResult(
-              mainText:  _normalizeWhitespace(rssContent),
+              mainText: _normalizeWhitespace(rssContent),
               imageUrl: metadata.imageUrl,
               pageTitle: metadata.title,
               isPaywalled: false,
@@ -325,7 +334,7 @@ class Readability4JExtended {
 
       // Extract JSON-LD BEFORE cleaning document (script tags will be removed)
       String? jsonLdContent = _extractJsonLdContent(doc);
-      
+
       _cleanDocument(doc);
       _removePaywallElements(doc);
 
@@ -394,13 +403,105 @@ class Readability4JExtended {
       if (response.statusCode != 200) {
         return null;
       }
+      if (_config.pageLoadDelay > Duration.zero) {
+        await Future.delayed(_config.pageLoadDelay);
+      }
 
-      return html_parser.parse(response.body);
+      var doc = html_parser.parse(response.body);
+
+      if (_config.paginationPageLimit > 0) {
+        doc = await _maybeAppendNextPages(
+              doc,
+              Uri.parse(url),
+              effectiveHeaders,
+            ) ??
+            doc;
+      }
+
+      return doc;
     } catch (_) {
       return null;
     }
   }
+   Future<dom.Document?> _maybeAppendNextPages(
+    dom.Document doc,
+    Uri baseUri,
+    Map<String, String> headers,
+  ) async {
+    final seen = <String>{baseUri.toString()};
+    var current = doc;
+    var nextUrl = _findNextPageUrl(current, baseUri);
+    var depth = 0;
 
+    while (nextUrl != null && depth < _config.paginationPageLimit) {
+      if (seen.contains(nextUrl)) {
+        break;
+      }
+
+      seen.add(nextUrl);
+
+      try {
+        final resp = await _client.get(Uri.parse(nextUrl), headers: headers);
+        if (resp.statusCode != 200) {
+          break;
+        }
+
+        if (_config.pageLoadDelay > Duration.zero) {
+          await Future.delayed(_config.pageLoadDelay);
+        }
+
+        final nextDoc = html_parser.parse(resp.body);
+        current = _mergeDocuments(current, nextDoc);
+      } catch (_) {
+        break;
+      }
+
+      depth++;
+      nextUrl = _findNextPageUrl(current, Uri.parse(nextUrl));
+    }
+
+    return current;
+  }
+
+  dom.Document _mergeDocuments(dom.Document original, dom.Document nextDoc) {
+    final body = original.body;
+    final nextBody = nextDoc.body;
+    if (body == null || nextBody == null) {
+      return original;
+    }
+
+    for (final child in nextBody.children) {
+      body.append(child.clone(true));
+    }
+
+    return original;
+  }
+
+  String? _findNextPageUrl(dom.Document doc, Uri baseUri) {
+    final link = doc.querySelector('link[rel="next"]');
+    final href = link?.attributes['href'];
+    if (href != null && href.isNotEmpty) {
+      return baseUri.resolve(href).toString();
+    }
+
+    final anchors = doc
+        .querySelectorAll('a[href]')
+        .where((a) =>
+            (a.text ?? '').toLowerCase().contains('next') ||
+            (a.attributes['aria-label'] ?? '')
+                .toLowerCase()
+                .contains('next'))
+        .toList();
+
+    for (final a in anchors) {
+      final href = a.attributes['href'];
+      if (href != null && href.isNotEmpty) {
+        return baseUri.resolve(href).toString();
+      }
+    }
+
+    return null;
+  }
   /// Build request headers - FIXED NULL SAFETY
   Future<Map<String, String>> _buildRequestHeaders(
     String url, {
@@ -644,9 +745,10 @@ class Readability4JExtended {
     for (final node in garbage) {
       node.remove();
     }
-    
+
     // Remove regular script tags but keep JSON-LD for now (will be removed later if needed)
-    final scripts = doc.querySelectorAll('script:not([type="application/ld+json"])');
+    final scripts =
+        doc.querySelectorAll('script:not([type="application/ld+json"])');
     for (final node in scripts) {
       node.remove();
     }
@@ -727,7 +829,9 @@ class Readability4JExtended {
                 json['@type'] == 'BlogPosting') {
               final articleBody =
                   json['articleBody'] ?? json['description'] ?? json['text'];
-              if (articleBody != null && articleBody is String && articleBody.trim().isNotEmpty) {
+              if (articleBody != null &&
+                  articleBody is String &&
+                  articleBody.trim().isNotEmpty) {
                 return articleBody.trim();
               }
             }
@@ -1064,35 +1168,38 @@ class Readability4JExtended {
     // First try to find any container with substantial text
     final allElements = doc.querySelectorAll('div, section, article, main');
     final candidates = <dom.Element>[];
-    
+
     for (final el in allElements) {
       final text = el.text?.trim() ?? '';
-      if (text.length > 150) { // Lowered threshold for tests
+      if (text.length > 150) {
+        // Lowered threshold for tests
         candidates.add(el);
       }
     }
-    
+
     if (candidates.isNotEmpty) {
       // Pick the element with the most text
-      candidates.sort((a, b) => (b.text?.length ?? 0).compareTo(a.text?.length ?? 0));
+      candidates
+          .sort((a, b) => (b.text?.length ?? 0).compareTo(a.text?.length ?? 0));
       final best = candidates.first;
-      
+
       // Use _extractMainText if it has block elements, otherwise use its text
-      final blocks = best.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
+      final blocks =
+          best.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
       if (blocks.isNotEmpty) {
         return _normalizeWhitespace(_extractMainText(best));
       } else {
         return _normalizeWhitespace(best.text?.trim() ?? '');
       }
     }
-    
+
     // Last resort: use body text
     final bodyText = doc.body?.text?.trim() ?? '';
     if (bodyText.isNotEmpty) {
       final normalized = _normalizeWhitespace(bodyText);
       return normalized.length > 80 ? normalized : null;
     }
-    
+
     return null;
   }
 
@@ -1126,6 +1233,8 @@ Readability4JExtended createReadabilityExtractor({
   Map<String, String>? customHeaders,
   bool useMobileUserAgent = false,
   Duration requestDelay = const Duration(seconds: 2),
+  Duration pageLoadDelay = Duration.zero,
+  int paginationPageLimit = 3,
   http.Client? client,
 }) {
   final config = ReadabilityConfig(
@@ -1133,6 +1242,8 @@ Readability4JExtended createReadabilityExtractor({
     customHeaders: customHeaders,
     useMobileUserAgent: useMobileUserAgent,
     requestDelay: requestDelay,
+    pageLoadDelay: pageLoadDelay,
+    paginationPageLimit: paginationPageLimit,
   );
 
   return Readability4JExtended(

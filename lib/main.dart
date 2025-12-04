@@ -56,6 +56,9 @@ class AppBootstrap extends StatelessWidget {
           create: (_) {
            final cookieBridge = CookieBridge();
             return Readability4JExtended(
+               config: ReadabilityConfig(
+                pageLoadDelay: const Duration(seconds: 5),
+              ),
               // Reuse in-app login cookies when pulling reader content
               cookieHeaderBuilder: (url) async {
                 final cookieHeader = await cookieBridge.buildHeader(url);
