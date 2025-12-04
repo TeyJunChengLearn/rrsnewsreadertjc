@@ -379,17 +379,21 @@ class Readability4JExtended {
           headers: rssHeaders,
         );
         if (rssContent != null && rssContent.hasContent) {
-          final metadata =
-              doc != null ? _extractMetadata(doc, Uri.parse(url)) : null;
+          final metadata = _Metadata(
+            title: rssContent.title,
+            author: rssContent.author,
+            publishedDate: rssContent.publishedDate,
+            imageUrl: rssContent.imageUrl,
+          );
 
           return ArticleReadabilityResult(
             mainText: _normalizeWhitespace(rssContent.text),
-            imageUrl: rssContent.imageUrl ?? metadata?.imageUrl,
-            pageTitle: metadata?.title ?? rssContent.title,
+            imageUrl: metadata.imageUrl,
+            pageTitle: metadata.title,
             isPaywalled: false,
             source: 'RSS',
-            author: metadata?.author ?? rssContent.author,
-            publishedDate: metadata?.publishedDate ?? rssContent.publishedDate,
+            author: metadata.author,
+            publishedDate: metadata.publishedDate,
           );
         }
       } catch (_) {
