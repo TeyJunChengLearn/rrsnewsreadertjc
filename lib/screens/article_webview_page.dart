@@ -808,8 +808,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     _heroImageUrl ??= result.imageUrl;
 
+     // Treat the page as paywalled only when the extracted text still looks
+    // like a short preview. Some sites keep paywall markers in the DOM even
+    // after login, so don't block full-text articles just because markers
+    // exist.
+    final looksPaywalled = previewOnly || (pagePaywalled && rawLines.length <= 3);
     setState(() {
-      _paywallLikely = pagePaywalled || previewOnly;
+      _paywallLikely = looksPaywalled;
       _lines
         ..clear()
         ..addAll(combined);

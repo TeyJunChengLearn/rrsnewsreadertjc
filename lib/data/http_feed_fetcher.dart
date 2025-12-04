@@ -5,10 +5,30 @@ import 'feed_fetcher.dart';
 class HttpFeedFetcher implements FeedFetcher {
   static const _userAgent = 'FlutterRSSReader/1.0 (+https://example.com)';
 
+
+HttpFeedFetcher({
+    this.cookieHeaderBuilder,
+    this.customHeaders,
+  });
+
+  /// Build a Cookie header for the target URL (e.g., session cookies).
+  final Future<String?> Function(String url)? cookieHeaderBuilder;
+
+  /// Additional headers to attach to every request.
+  final Map<String, String>? customHeaders;
   @override
   Future<String> fetch(String url) async {
     final uri = Uri.parse(url);
-        final headers = {'User-Agent': _userAgent};
+       final headers = {
+      'User-Agent': _userAgent,
+      ...?customHeaders,
+    };
+
+    final cookies =
+        cookieHeaderBuilder != null ? await cookieHeaderBuilder!(url) : null;
+    if (cookies != null && cookies.isNotEmpty) {
+      headers['Cookie'] = cookies;
+    }
     Exception? lastError;
 
     for (var attempt = 0; attempt < 2; attempt++) {

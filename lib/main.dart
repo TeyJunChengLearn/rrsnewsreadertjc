@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-
 import 'providers/settings_provider.dart';
 import 'providers/rss_provider.dart';
 
@@ -20,7 +19,7 @@ import 'services/rss_service.dart';
 import 'data/feed_repository.dart';
 import 'screens/root_shell.dart';
 
-Future<void> main() async{
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const AppBootstrap());
 }
@@ -52,11 +51,15 @@ class AppBootstrap extends StatelessWidget {
         ProxyProvider<DatabaseService, FeedSourceDao>(
           update: (_, db, __) => FeedSourceDao(db),
         ),
+        Provider<CookieBridge>(
+          create: (_) => CookieBridge(),
+        ),
+
         Provider<Readability4JExtended>(
-          create: (_) {
-           final cookieBridge = CookieBridge();
+          create: (ctx) {
+            final cookieBridge = ctx.read<CookieBridge>();
             return Readability4JExtended(
-               config: ReadabilityConfig(
+              config: ReadabilityConfig(
                 pageLoadDelay: const Duration(seconds: 5),
               ),
               // Reuse in-app login cookies when pulling reader content
@@ -68,7 +71,8 @@ class AppBootstrap extends StatelessWidget {
           },
         ),
 
-        ProxyProvider2<Readability4JExtended, ArticleDao, ArticleContentService>(
+        ProxyProvider2<Readability4JExtended, ArticleDao,
+            ArticleContentService>(
           update: (_, readability, articleDao, __) => ArticleContentService(
             readability: readability,
             articleDao: articleDao,
@@ -84,14 +88,15 @@ class AppBootstrap extends StatelessWidget {
         ),
 
         // REPOSITORY = RSS + DB
-        ProxyProvider4<RssService, ArticleDao, FeedSourceDao, ArticleContentService,
-            FeedRepository>(
-          update: (_, rssService, articleDao, feedSourceDao, articleContent, __) =>
-              FeedRepository(
+        ProxyProvider4<RssService, ArticleDao, FeedSourceDao,
+            ArticleContentService, FeedRepository>(
+          update:
+              (_, rssService, articleDao, feedSourceDao, articleContent, __) =>
+                  FeedRepository(
             rssService: rssService,
             articleDao: articleDao,
             feedSourceDao: feedSourceDao,
-             articleContentService: articleContent,
+            articleContentService: articleContent,
           ),
         ),
 
