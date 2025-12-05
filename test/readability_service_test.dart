@@ -137,7 +137,7 @@ test('prefers the WebView strategy and forwards cookies + user agent',
       expect(result, isNotNull);
       expect(result!.mainText, 'Body text rendered inside the WebView.');
       expect(result.imageUrl, 'https://example.com/hero.jpg');
-      expect(result.source, 'Android WebView');
+      expect(result.source, 'Authenticated WebView'); // Changed: now detects auth cookies
       expect(fakeWebView.lastUrl, 'https://example.com/story');
       expect(fakeWebView.lastCookieHeader, 'session=webview-user');
       expect(fakeWebView.lastUserAgent,

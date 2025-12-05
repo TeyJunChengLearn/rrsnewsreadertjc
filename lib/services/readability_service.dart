@@ -631,64 +631,55 @@ class Readability4JExtended {
       ArticleReadabilityResult? bestResult;
       var bestLength = 0;
 
-      ArticleReadabilityResult? bestPartialResult;
-
       for (final strategy in strategies) {
         try {
           final result = await strategy;
           if (result != null && result.hasContent) {
-<<<<<<< HEAD
-            final textLength = result.mainText?.length ?? 0;
-
-            // For authenticated users, prefer longer content
-            if (hasCookies) {
-              if (textLength > bestLength) {
-                bestLength = textLength;
-                bestResult = result;
-
-                // If we got substantial content (>800 chars), accept it
-                if (textLength > 800) {
-                  return result;
-                }
-              }
-            } else {
-              // Not authenticated, return first good result
-              return result;
-            }
-=======
             final textLen = result.mainText?.length ?? 0;
             final isPaywalled = result.isPaywalled ?? false;
             final source = result.source ?? 'Unknown';
 
             print('Strategy "$source" extracted $textLen chars (paywalled: $isPaywalled, full: ${result.hasFullContent})');
 
-            // If we found full content, return immediately
+            // Priority 1: If we found full content (not a teaser), return immediately
             if (result.hasFullContent) {
               print('✓ Returning full content from "$source"');
               return result;
             }
-            // Keep the best partial result (longest text) as fallback
-            if (bestPartialResult == null ||
-                (result.mainText?.length ?? 0) > (bestPartialResult.mainText?.length ?? 0)) {
-              bestPartialResult = result;
-              print('  Keeping as best partial result');
+
+            // Priority 2: For authenticated users, keep tracking longest content
+            if (hasCookies) {
+              if (textLen > bestLength) {
+                bestLength = textLen;
+                bestResult = result;
+                print('  Keeping as best result (authenticated user)');
+
+                // If we got substantial content (>800 chars), accept it
+                if (textLen > 800) {
+                  print('✓ Substantial content found, returning from "$source"');
+                  return result;
+                }
+              }
+            } else {
+              // Priority 3: Not authenticated, keep best partial result
+              if (textLen > bestLength) {
+                bestLength = textLen;
+                bestResult = result;
+                print('  Keeping as best partial result');
+              }
             }
->>>>>>> d6cafb2bed75b84039e8ab31b3013181f19a9750
           }
         } catch (e) {
           continue;
         }
       }
 
-<<<<<<< HEAD
-      return bestResult;
-=======
-      // Return best partial result if we didn't find full content
-      if (bestPartialResult != null) {
-        print('⚠ No full content found, returning best partial (${bestPartialResult.mainText?.length ?? 0} chars from ${bestPartialResult.source})');
+      // Return best result we found
+      if (bestResult != null) {
+        final resultLen = bestResult.mainText?.length ?? 0;
+        print('⚠ No full content found, returning best partial ($resultLen chars from ${bestResult.source})');
       }
-      return bestPartialResult;
->>>>>>> d6cafb2bed75b84039e8ab31b3013181f19a9750
+      return bestResult;
     } catch (e) {
       print('Error extracting content from $url: $e');
       return null;
