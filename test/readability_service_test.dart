@@ -11,6 +11,7 @@ class _FakeWebViewExtractor extends AndroidWebViewExtractor {
   String? lastUrl;
   String? lastCookieHeader;
   String? lastUserAgent;
+  Duration? lastPostLoadDelay;
 
   @override
   Future<String?> renderPage(
@@ -23,6 +24,7 @@ class _FakeWebViewExtractor extends AndroidWebViewExtractor {
     lastUrl = url;
     lastCookieHeader = cookieHeader;
     lastUserAgent = userAgent;
+    lastPostLoadDelay = postLoadDelay;
 
     return '''
       <html>
@@ -142,6 +144,36 @@ test('prefers the WebView strategy and forwards cookies + user agent',
       expect(fakeWebView.lastCookieHeader, 'session=webview-user');
       expect(fakeWebView.lastUserAgent,
           contains('Chrome/125.0.0.0 Mobile Safari/537.36'));
+    });
+
+    test(
+        'treats nonstandard auth cookies as authenticated and extends WebView delay',
+        () async {
+      final fakeWebView = _FakeWebViewExtractor();
+
+      final client = MockClient((_) async => http.Response('', 500));
+
+      final readability = Readability4JExtended(
+        client: client,
+        webViewExtractor: fakeWebView,
+        cookieHeaderBuilder: (_) async => 'weird_auth_cookie=abc123',
+        config: ReadabilityConfig(
+          pageLoadDelay: const Duration(seconds: 2),
+          webViewMaxSnapshots: 1,
+          siteSpecificAuthCookiePatterns: {
+            'oddnews.com': ['weird_auth_cookie'],
+          },
+        ),
+      );
+
+      final result =
+          await readability.extractMainContent('https://sub.oddnews.com/paywalled');
+
+      expect(result, isNotNull);
+      expect(fakeWebView.lastCookieHeader, 'weird_auth_cookie=abc123');
+      expect(fakeWebView.lastPostLoadDelay, const Duration(seconds: 5));
+      expect(fakeWebView.lastUserAgent,
+          contains('Chrome/120.0.0.0 Safari/537.36'));
     });
 
     test('falls back to metadata image when article root is missing', () async {
