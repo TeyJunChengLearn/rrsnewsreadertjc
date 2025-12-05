@@ -874,13 +874,53 @@ class Readability4JExtended {
         initialDelay: loadDelay,
       );
 
-      if (html == null || html.isEmpty) return null;
+      ArticleReadabilityResult? bestResult;
 
-      return await extractFromHtml(
-        url,
-        html,
-        strategyName: hasCookies ? 'Authenticated WebView' : 'Android WebView',
-      );
+      if (html != null && html.isNotEmpty) {
+        bestResult = await extractFromHtml(
+          url,
+          html,
+          strategyName: hasCookies
+              ? 'Authenticated WebView'
+              : 'Android WebView',
+        );
+      }
+
+      final isTruncatedResult = bestResult == null ||
+          (bestResult.mainText?.length ?? 0) < 1200 ||
+          !bestResult.hasFullContent;
+
+      if (isTruncatedResult) {
+        final retryHtml = await _captureStabilizedHtml(
+          url: url,
+          headers: headers,
+          initialDelay: loadDelay + const Duration(seconds: 5),
+          maxDurationOverride:
+              _config.webViewMaxSnapshotDuration + const Duration(seconds: 8),
+          maxSnapshotsOverride: _config.webViewMaxSnapshots + 2,
+        );
+
+        if (retryHtml != null && retryHtml.isNotEmpty) {
+          final retryResult = await extractFromHtml(
+            url,
+            retryHtml,
+            strategyName: hasCookies
+                ? 'Authenticated WebView (retry)'
+                : 'Android WebView (retry)',
+          );
+
+          if (retryResult != null && retryResult.hasContent) {
+            final retryLength = retryResult.mainText?.length ?? 0;
+            final bestLength = bestResult?.mainText?.length ?? 0;
+
+            if (bestResult == null || retryLength > bestLength) {
+              bestResult = retryResult;
+            }
+          }
+        }
+      }
+
+      return bestResult;
     } catch (_) {
       return null;
     }
@@ -890,12 +930,15 @@ class Readability4JExtended {
     required String url,
     required Map<String, String> headers,
     required Duration initialDelay,
+    Duration? maxDurationOverride,
+    int? maxSnapshotsOverride,
   }) async {
     if (_webViewExtractor == null) return null;
 
     final interval = _config.webViewSnapshotInterval;
-    final maxDuration = _config.webViewMaxSnapshotDuration;
-    final maxSnapshots = _config.webViewMaxSnapshots;
+    final maxDuration =
+        maxDurationOverride ?? _config.webViewMaxSnapshotDuration;
+    final maxSnapshots = maxSnapshotsOverride ?? _config.webViewMaxSnapshots;
     final stopwatch = Stopwatch()..start();
 
     String? lastHtml;
