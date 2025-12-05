@@ -76,7 +76,8 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
   // VISIBLE LIST (this is what news_page.dart shows)
   // ---------------------------------------------------------------------------
   List<FeedItem> get visibleItems {
-    Iterable<FeedItem> data = _items;
+    // Always hide entries that were archived (isRead == 2)
+    Iterable<FeedItem> data = _items.where((e) => e.isRead != 2);
 
     // 1) bookmark filter
     if (_bookmarkFilter == BookmarkFilter.bookmarkedOnly) {
@@ -88,7 +89,8 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       case ReadFilter.all:
         break;
       case ReadFilter.unreadOnly:
-        data = data.where((e) => !(e.isRead==1));
+        // Only show genuinely unread items; exclude archived entries
+        data = data.where((e) => e.isRead == 0);
         break;
       case ReadFilter.readOnly:
         data = data.where((e) => (e.isRead==1));
@@ -112,6 +114,8 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return const [];
     return _items.where((item) {
+      // Hide archived items from search results too
+      if (item.isRead == 2) return false;
       return item.title.toLowerCase().contains(q) ||
           (item.description ?? '').toLowerCase().contains(q) ||
           item.sourceTitle.toLowerCase().contains(q);
