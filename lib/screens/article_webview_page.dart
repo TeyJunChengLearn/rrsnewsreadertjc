@@ -389,9 +389,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   }
 
   Future<void> _loadReaderContent() async {
-    setState(() {
-      _isLoading = true;
-    });
+    final shouldShowLoading = _lines.isEmpty;
+    if (shouldShowLoading) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
@@ -408,7 +411,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
     );
 
-    if (mounted) {
+    if (mounted && shouldShowLoading) {
       setState(() {
         _isLoading = false;
       });
