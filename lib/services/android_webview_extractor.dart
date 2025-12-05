@@ -14,13 +14,17 @@ class AndroidWebViewExtractor {
   Future<String?> renderPage(
     String url, {
     Duration timeout = const Duration(seconds: 15),
+    Duration postLoadDelay = Duration.zero,
     String? userAgent,
+    String? cookieHeader,
   }) async {
     try {
       final html = await _channel.invokeMethod<String>('renderPage', {
         'url': url,
         'timeoutMs': timeout.inMilliseconds,
+        'postLoadDelayMs': postLoadDelay.inMilliseconds,
         'userAgent': userAgent,
+        'cookieHeader': cookieHeader,
       });
 
       if (html == null || html.isEmpty) return null;

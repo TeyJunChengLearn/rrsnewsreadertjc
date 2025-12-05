@@ -47,6 +47,19 @@ Subscriber pages follow the exact same pipeline—no hidden bypasses:
   reading or TTS just like free articles.【F:lib/screens/article_webview_page.dart†L340-L381】【F:lib/screens/article_webview_page.dart†L771-L906】【F:lib/services/readability_service.dart†L474-L535】
 # rrsnewsreadertjc
 
+## How the readability service processes articles
+
+1. When you tap an article, the Android-only off-screen WebView renders the
+   page with JavaScript and DOM storage enabled, then hands the captured HTML
+   to `Readability4JExtended.extractFromHtml` so the extractor sees the same
+   content you see in the WebView, including any hero image.【F:lib/screens/article_webview_page.dart†L771-L906】【F:lib/services/readability_service.dart†L760-L847】
+2. Before any HTTP fetch, `_buildRequestHeaders` injects the session cookies
+   supplied by `cookieHeaderBuilder` or the WebView bridge, so subsequent
+   network requests reuse your authenticated session for subscriber pages.【F:lib/services/readability_service.dart†L560-L672】【F:lib/services/readability_service.dart†L897-L925】
+3. The extractor cleans the DOM, removes paywall overlays, pulls the main text
+   (or JSON-LD body when available), and preserves metadata like title, author,
+   publish date, and hero image. The result is cached just like free articles
+   for offline reading and TTS.【F:lib/services/readability_service.dart†L790-L847
 ## Accessing paywalled articles
 
 The readability service can fetch subscriber-only pages as long as you provide
