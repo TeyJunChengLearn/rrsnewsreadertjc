@@ -75,12 +75,23 @@ class ArticleReadabilityResult {
   bool get hasFullContent {
     if (!hasContent) return false;
 
-    // If not paywalled and has content, it's probably full
-    if (isPaywalled != true) return true;
-
-    // For paywalled content, check if it's substantial (not a teaser)
     final text = mainText?.trim() ?? '';
     if (text.isEmpty) return false;
+
+    final normalizedParagraphs =
+        text.replaceAll('\r\n', '\n').split(RegExp(r'\n\s*\n'));
+    final paragraphCount =
+        normalizedParagraphs.where((p) => p.trim().isNotEmpty).length;
+    final hasMultipleParagraphs = paragraphCount >= 2;
+    final meetsLengthThreshold = text.length >= 200;
+    final passesBasicCompleteness =
+        meetsLengthThreshold || hasMultipleParagraphs;
+
+    // For non-paywalled content, require a minimum length or multiple paragraphs
+    if (isPaywalled != true) return passesBasicCompleteness;
+
+    // For paywalled content, check if it's substantial (not a teaser)
+    if (!passesBasicCompleteness) return false;
 
     // Lowered from 600 to 400 - some legitimate articles are short
     // Especially after paywall removal, we should trust the content more

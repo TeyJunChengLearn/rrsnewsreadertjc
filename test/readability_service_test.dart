@@ -41,6 +41,27 @@ class _FakeWebViewExtractor extends AndroidWebViewExtractor {
     ''';
   }
 }
+
+class _ProgressiveWebViewExtractor extends AndroidWebViewExtractor {
+  final List<String?> snapshots;
+  int callCount = 0;
+
+  _ProgressiveWebViewExtractor(this.snapshots);
+
+  @override
+  Future<String?> renderPage(
+    String url, {
+    Duration timeout = const Duration(seconds: 15),
+    Duration postLoadDelay = Duration.zero,
+    String? userAgent,
+    String? cookieHeader,
+  }) async {
+    final index =
+        callCount < snapshots.length ? callCount : snapshots.length - 1;
+    callCount++;
+    return snapshots[index];
+  }
+}
 void main() {
   group('Readability4JExtended', () {
     test('returns main text and lead image when available', () async {
@@ -174,6 +195,54 @@ test('prefers the WebView strategy and forwards cookies + user agent',
       expect(fakeWebView.lastPostLoadDelay, const Duration(seconds: 5));
       expect(fakeWebView.lastUserAgent,
           contains('Chrome/120.0.0.0 Safari/537.36'));
+    });
+
+    test(
+        'prefers later strategies when the first authenticated WebView snapshot is partial',
+        () async {
+      const partialHtml = '''
+        <html>
+          <body>
+            <article>
+              <p>This is just a short preview from the first WebView snapshot.</p>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      const fullHtml = '''
+        <html>
+          <body>
+            <article>
+              <p>Full paragraph with enough detail to surpass the minimum completeness threshold for non-paywalled content when extracted. It includes several sentences to push the character count beyond two hundred so the readability logic treats it as full text instead of a teaser shown to unauthenticated users.</p>
+              <p>Second paragraph continues the article body to satisfy the multi-paragraph requirement while authenticated strategies continue executing beyond the first snapshot.</p>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final webView = _ProgressiveWebViewExtractor([partialHtml]);
+
+      final client = MockClient((_) async => http.Response(fullHtml, 200));
+
+      final readability = Readability4JExtended(
+        client: client,
+        webViewExtractor: webView,
+        cookieHeaderBuilder: (_) async => 'session=member',
+        config: ReadabilityConfig(
+          webViewMaxSnapshots: 1,
+        ),
+      );
+
+      final result = await readability
+          .extractMainContent('https://example.com/authenticated-story');
+
+      expect(webView.callCount, greaterThanOrEqualTo(1));
+      expect(result, isNotNull);
+      expect(result!.source, 'Desktop');
+      expect(result.mainText, contains('Full paragraph with enough detail'));
+      expect(result.mainText, contains('Second paragraph continues'));
+      expect(result.mainText!.length, greaterThan(200));
     });
 
     test('falls back to metadata image when article root is missing', () async {
