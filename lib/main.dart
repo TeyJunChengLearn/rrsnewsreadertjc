@@ -55,22 +55,24 @@ class AppBootstrap extends StatelessWidget {
           create: (_) => CookieBridge(),
         ),
 
-        Provider<Readability4JExtended>(
-          create: (ctx) {
-            final cookieBridge = ctx.read<CookieBridge>();
-            return Readability4JExtended(
-              config: ReadabilityConfig(
-                pageLoadDelay: const Duration(seconds: 10),
-                useMobileUserAgent: true,
-              ),
-              // Reuse in-app login cookies when pulling reader content
-              cookieHeaderBuilder: (url) async {
-                final cookieHeader = await cookieBridge.buildHeader(url);
-                return cookieHeader;
-              },
-            );
-          },
-        ),
+        // In main.dart, update the Readability4JExtended provider
+// Update the Readability4JExtended provider in main.dart
+Provider<Readability4JExtended>(
+  create: (ctx) {
+    final cookieBridge = ctx.read<CookieBridge>();
+    return Readability4JExtended(
+      config: ReadabilityConfig(
+        pageLoadDelay: const Duration(seconds: 10),
+        useMobileUserAgent: true,
+        attemptAuthenticatedRss: true, // Enable new feature
+      ),
+      cookieHeaderBuilder: (url) async {
+        final cookieHeader = await cookieBridge.buildHeader(url);
+        return cookieHeader;
+      },
+    );
+  },
+),
 
         ProxyProvider2<Readability4JExtended, ArticleDao,
             ArticleContentService>(

@@ -1,3 +1,4 @@
+// readability_service.dart - COMPLETE FIXED VERSION
 import 'dart:convert';
 import 'dart:io';
 import 'package:html/dom.dart' as dom;
@@ -39,27 +40,34 @@ class ArticleReadabilityResult {
   }
 }
 
-/// Metadata extraction result
+/// Enhanced metadata extraction with paid content flags
 class _Metadata {
   final String? title;
   final String? author;
   final DateTime? publishedDate;
   final String? imageUrl;
+  final bool isSubscriberContent;
+  final String? feedType;
 
   _Metadata({
     this.title,
     this.author,
     this.publishedDate,
     this.imageUrl,
+    this.isSubscriberContent = false,
+    this.feedType,
   });
 }
-/// Represents an RSS item's rich content to be merged into readability results.
+
+/// Enhanced RSS item content with subscription info
 class _RssItemContent {
   final String text;
   final String? imageUrl;
   final String? title;
   final String? author;
   final DateTime? publishedDate;
+  final bool isSubscriberContent;
+  final String? subscriptionTier;
 
   const _RssItemContent({
     required this.text,
@@ -67,31 +75,41 @@ class _RssItemContent {
     this.title,
     this.author,
     this.publishedDate,
+    this.isSubscriberContent = false,
+    this.subscriptionTier,
   });
 
   bool get hasContent => text.trim().isNotEmpty;
 }
-/// Configuration for the readability service - FIXED CONSTRUCTOR
+
+/// Configuration for the readability service - ENHANCED
 class ReadabilityConfig {
   final Map<String, String>? cookies;
   final Map<String, String>? customHeaders;
   final List<String> paywallKeywords;
   final bool attemptRssFallback;
+  final bool attemptAuthenticatedRss;
   final Duration requestDelay;
   final Duration pageLoadDelay;
   final int paginationPageLimit;
   final bool useMobileUserAgent;
   final String userAgent;
+  final Map<String, String> siteSpecificAuthHeaders;
+  final Map<String, String> knownSubscriberFeeds;
+
   ReadabilityConfig({
     Map<String, String>? cookies,
     Map<String, String>? customHeaders,
     List<String>? paywallKeywords,
     bool? attemptRssFallback,
+    bool? attemptAuthenticatedRss,
     Duration? requestDelay,
     Duration? pageLoadDelay,
     int? paginationPageLimit,
     bool? useMobileUserAgent,
     String? userAgent,
+    Map<String, String>? siteSpecificAuthHeaders,
+    Map<String, String>? knownSubscriberFeeds,
   })  : cookies = cookies,
         customHeaders = customHeaders,
         paywallKeywords = paywallKeywords ??
@@ -113,66 +131,104 @@ class ReadabilityConfig {
               'This content is for subscribers only',
             ],
         attemptRssFallback = attemptRssFallback ?? true,
+        attemptAuthenticatedRss = attemptAuthenticatedRss ?? true,
         requestDelay = requestDelay ?? const Duration(seconds: 2),
         pageLoadDelay = pageLoadDelay ?? Duration.zero,
-         paginationPageLimit = paginationPageLimit ?? 3,
+        paginationPageLimit = paginationPageLimit ?? 3,
         useMobileUserAgent = useMobileUserAgent ?? false,
         userAgent = userAgent ??
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        siteSpecificAuthHeaders = siteSpecificAuthHeaders ?? {},
+        knownSubscriberFeeds = knownSubscriberFeeds ??
+            {
+              'nytimes.com': 'https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml',
+              'wsj.com': 'https://feeds.a.dj.com/rss/RSSWSJD.xml',
+              'ft.com': 'https://www.ft.com/?format=rss',
+              'economist.com': 'https://www.economist.com/rss',
+              'bloomberg.com': 'https://www.bloomberg.com/feed/podcast/etf-report.xml',
+              'washingtonpost.com': 'https://feeds.washingtonpost.com/rss/rss_compost',
+              'theguardian.com': 'https://www.theguardian.com/world/rss',
+              'reuters.com': 'https://www.reutersagency.com/feed/',
+              'apnews.com': 'https://apnews.com/feed',
+            };
 }
 
-/// RSS feed parser for news sites
+/// Enhanced RSS feed parser with subscription detection
 class RssFeedParser {
   final http.Client _client;
+  final Map<String, String>? _siteSpecificAuthHeaders;
+  final Future<String?> Function(String url)? cookieHeaderBuilder;
 
-  RssFeedParser({http.Client? client}) : _client = client ?? http.Client();
+  RssFeedParser({
+    http.Client? client,
+    Map<String, String>? siteSpecificAuthHeaders,
+    this.cookieHeaderBuilder,
+  })  : _client = client ?? http.Client(),
+        _siteSpecificAuthHeaders = siteSpecificAuthHeaders;
 
-/// Extract article content and metadata from an RSS feed.
+  /// Extract article content and metadata from RSS feed with subscription support
   Future<_RssItemContent?> extractFromRss(
     String rssUrl,
     String targetUrl, {
     Map<String, String>? headers,
+    bool isSubscriberFeed = false,
   }) async {
     try {
+      final enhancedHeaders = await _enhanceHeadersForRss(
+        rssUrl,
+        headers ?? {},
+        isSubscriberFeed: isSubscriberFeed,
+      );
+
       final response = await _client.get(
         Uri.parse(rssUrl),
-        headers: headers,
+        headers: enhancedHeaders,
       );
-      if (response.statusCode != 200) return null;
+      
+      if (response.statusCode != 200) {
+        return null;
+      }
 
       final xmlDoc = XmlDocument.parse(response.body);
       final normalizedTarget = _normalizeUrl(targetUrl);
 
-          // If not found, try description
-          for (final item in xmlDoc.findAllElements('item')) {
+      final isSubscriberContent = _detectSubscriberContent(xmlDoc);
+
+      for (final item in xmlDoc.findAllElements('item')) {
         final link = _readText(item, 'link');
         final guid = _readText(item, 'guid');
         final origin = _readText(item, 'origLink');
 
-          final candidateLinks = [link, guid, origin]
+        final candidateLinks = [link, guid, origin]
             .where((candidate) => candidate != null)
             .cast<String>();
 
-          final matched = candidateLinks.any(
-          (candidate) => _matchesTarget(_normalizeUrl(candidate), normalizedTarget),
-        );
+        final matched = candidateLinks.any((candidate) =>
+            _matchesTarget(_normalizeUrl(candidate), normalizedTarget));
 
         if (!matched) continue;
 
         final content = _readText(item, 'encoded', namespace: 'content') ??
+            _readText(item, 'full-text', namespace: 'content') ??
             _readText(item, 'content') ??
             _readText(item, 'description');
 
         final cleanedText = _cleanRssContent(content);
+        
+        final subscriptionTier = _extractSubscriptionTier(item);
 
-        // Prefer media content; fall back to enclosure or first image in HTML.
-        final imageUrl = _extractImageUrl(item) ?? _extractImageFromHtml(content);
+        final imageUrl = _extractImageUrl(item) ??
+            _extractImageFromHtml(content) ??
+            _extractImageFromEnclosure(item);
 
         final author = _readText(item, 'creator', namespace: 'dc') ??
-            _readText(item, 'author');
+            _readText(item, 'author') ??
+            _readText(item, 'contributor', namespace: 'dc');
+
         final pubDate = _parseDate(_readText(item, 'pubDate')) ??
-            _parseDate(_readText(item, 'published'));
+            _parseDate(_readText(item, 'published')) ??
+            _parseDate(_readText(item, 'updated'));
 
         final title = _readText(item, 'title');
 
@@ -183,11 +239,98 @@ class RssFeedParser {
             title: title,
             author: author,
             publishedDate: pubDate,
+            isSubscriberContent: isSubscriberContent,
+            subscriptionTier: subscriptionTier,
           );
         }
       }
     } catch (e) {
       print('RSS parsing error: $e');
+    }
+    return null;
+  }
+
+  /// Enhance headers for subscriber RSS feeds
+  Future<Map<String, String>> _enhanceHeadersForRss(
+    String rssUrl,
+    Map<String, String> baseHeaders, {
+    bool isSubscriberFeed = false,
+  }) async {
+    final enhanced = Map<String, String>.from(baseHeaders);
+    
+    final cookie = cookieHeaderBuilder != null 
+        ? await cookieHeaderBuilder!(rssUrl) 
+        : null;
+    
+    if (cookie != null && cookie.isNotEmpty) {
+      enhanced['Cookie'] = cookie;
+    }
+
+    final uri = Uri.tryParse(rssUrl);
+    if (uri != null && _siteSpecificAuthHeaders != null) {
+      final host = uri.host;
+      for (final entry in _siteSpecificAuthHeaders!.entries) {
+        if (host.contains(entry.key)) {
+          enhanced['Authorization'] = entry.value;
+          break;
+        }
+      }
+    }
+
+    if (isSubscriberFeed) {
+      enhanced['X-Requested-With'] = 'XMLHttpRequest';
+      enhanced['X-Subscriber'] = 'true';
+    }
+
+    return enhanced;
+  }
+
+  /// Detect if RSS feed contains subscriber-only content
+  bool _detectSubscriberContent(XmlDocument doc) {
+    final channel = doc.findAllElements('channel').firstOrNull;
+    if (channel != null) {
+      final copyright = _readText(channel, 'copyright')?.toLowerCase() ?? '';
+      final description = _readText(channel, 'description')?.toLowerCase() ?? '';
+      
+      const subscriberIndicators = [
+        'subscriber',
+        'premium',
+        'members-only',
+        'paid',
+        'exclusive',
+      ];
+      
+      for (final indicator in subscriberIndicators) {
+        if (copyright.contains(indicator) || description.contains(indicator)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Extract subscription tier information
+  String? _extractSubscriptionTier(XmlElement item) {
+    final categories = item.findElements('category');
+    for (final category in categories) {
+      final text = category.text.toLowerCase();
+      if (text.contains('premium') || text.contains('subscriber')) {
+        return category.text;
+      }
+    }
+    return null;
+  }
+
+  /// Enhanced image extraction from enclosure
+  String? _extractImageFromEnclosure(XmlElement item) {
+    final enclosures = item.findElements('enclosure');
+    for (final enclosure in enclosures) {
+      final type = enclosure.getAttribute('type')?.toLowerCase() ?? '';
+      final url = enclosure.getAttribute('url');
+      
+      if (url != null && (type.startsWith('image/') || type.isEmpty)) {
+        return url;
+      }
     }
     return null;
   }
@@ -198,8 +341,32 @@ class RssFeedParser {
     return matches.first.text.trim();
   }
 
-     bool _matchesTarget(String? candidate, String normalizedTarget) {
+  bool _matchesTarget(String? candidate, String normalizedTarget) {
     if (candidate == null || candidate.isEmpty) return false;
+    
+    final candidateParts = Uri.tryParse(candidate);
+    final targetParts = Uri.tryParse(normalizedTarget);
+    
+    if (candidateParts != null && targetParts != null) {
+      final candidatePath = candidateParts.pathSegments.join('/');
+      final targetPath = targetParts.pathSegments.join('/');
+      
+      if (candidatePath.isNotEmpty && targetPath.isNotEmpty) {
+        if (candidatePath.contains(targetPath) || targetPath.contains(candidatePath)) {
+          return true;
+        }
+      }
+      
+      final candidateId = candidateParts.queryParameters['id'] ?? 
+                         candidateParts.queryParameters['article'];
+      final targetId = targetParts.queryParameters['id'] ?? 
+                      targetParts.queryParameters['article'];
+      
+      if (candidateId != null && targetId != null && candidateId == targetId) {
+        return true;
+      }
+    }
+    
     return candidate == normalizedTarget ||
         candidate.contains(normalizedTarget) ||
         normalizedTarget.contains(candidate);
@@ -212,7 +379,10 @@ class RssFeedParser {
         uri.queryParameters.entries.where(
           (entry) =>
               !entry.key.toLowerCase().startsWith('utm_') &&
-              entry.key.toLowerCase() != 'fbclid',
+              !entry.key.toLowerCase().startsWith('fbclid') &&
+              !entry.key.toLowerCase().startsWith('_ga') &&
+              entry.key.toLowerCase() != 'ref' &&
+              entry.key.toLowerCase() != 'source',
         ),
       );
 
@@ -235,6 +405,17 @@ class RssFeedParser {
     final stripped = content.replaceAll(RegExp(r'<!\[CDATA\[|\]\]>'), '');
     final fragment = html_parser.parseFragment(stripped);
 
+    final paywallElements = fragment.querySelectorAll('''
+      .paywall-message,
+      .subscription-required,
+      .premium-content-message,
+      .article-locked
+    ''');
+    
+    for (final element in paywallElements) {
+      element.remove();
+    }
+
     final paragraphs = fragment.querySelectorAll('p, li, blockquote, pre');
     if (paragraphs.isEmpty) {
       return _normalizeWhitespace(fragment.text ?? '');
@@ -243,7 +424,7 @@ class RssFeedParser {
     final buffer = StringBuffer();
     for (final element in paragraphs) {
       final text = element.text.trim();
-      if (text.isNotEmpty) {
+      if (text.isNotEmpty && !_isPaywallMessage(text)) {
         if (buffer.isNotEmpty) buffer.write('\n\n');
         buffer.write(text);
       }
@@ -252,29 +433,53 @@ class RssFeedParser {
     return _normalizeWhitespace(buffer.toString());
   }
 
+  bool _isPaywallMessage(String text) {
+    const paywallPhrases = [
+      'subscribe to read',
+      'continue reading',
+      'premium content',
+      'members only',
+      'subscriber exclusive',
+    ];
+    
+    final lowerText = text.toLowerCase();
+    return paywallPhrases.any((phrase) => lowerText.contains(phrase));
+  }
+
   String? _extractImageUrl(XmlElement item) {
     final mediaContent = item.findElements('content', namespace: 'media');
-    if (mediaContent.isNotEmpty) {
-      final url = mediaContent.first.getAttribute('url');
+    for (final content in mediaContent) {
+      final url = content.getAttribute('url');
       if (url != null && url.isNotEmpty) return url;
     }
 
-    final enclosure = item.findElements('enclosure');
-    if (enclosure.isNotEmpty) {
-      final url = enclosure.first.getAttribute('url');
-      final type = enclosure.first.getAttribute('type');
-      if (url != null && (type?.startsWith('image/') ?? true)) {
-        return url;
-      }
+    final mediaThumbnail = item.findElements('thumbnail', namespace: 'media');
+    for (final thumbnail in mediaThumbnail) {
+      final url = thumbnail.getAttribute('url');
+      if (url != null && url.isNotEmpty) return url;
     }
+
     return null;
   }
 
   String? _extractImageFromHtml(String? html) {
     if (html == null || html.isEmpty) return null;
     final fragment = html_parser.parseFragment(html);
-    final img = fragment.querySelector('img');
-    return img?.attributes['src'];
+    
+    final img = fragment.querySelector('img[src]');
+    if (img != null) {
+      return img.attributes['src'];
+    }
+    
+    final picture = fragment.querySelector('picture source[srcset]');
+    if (picture != null) {
+      final srcset = picture.attributes['srcset'];
+      if (srcset != null && srcset.isNotEmpty) {
+        return srcset.split(',').first.split(' ').first;
+      }
+    }
+    
+    return null;
   }
 
   DateTime? _parseDate(String? date) {
@@ -295,33 +500,38 @@ class RssFeedParser {
   }
 }
 
-/// Main readability class
+/// Enhanced main readability class with ALL methods properly integrated
 class Readability4JExtended {
   final http.Client _client;
   final ReadabilityConfig _config;
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
   final Future<String?> Function(String url)? cookieHeaderBuilder;
+  final Map<String, bool> _feedSubscriptionStatus = {};
 
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
     this.cookieHeaderBuilder,
   })  : _client = client ?? http.Client(),
-        _config = config ?? ReadabilityConfig(), // 使用非const构造函数
-        _rssParser = RssFeedParser(client: client);
+        _config = config ?? ReadabilityConfig(),
+        _rssParser = RssFeedParser(
+          client: client,
+          siteSpecificAuthHeaders: config?.siteSpecificAuthHeaders,
+          cookieHeaderBuilder: cookieHeaderBuilder,
+        );
 
-  /// Main extraction method
+  /// Main extraction method with subscription awareness
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
-      // Respect rate limiting
       await _respectRateLimit(url);
 
-      // Try multiple strategies in order
       final strategies = [
         _extractWithDefaultStrategy(url),
+        _extractFromKnownSubscriberFeeds(url),
         if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
         if (_config.attemptRssFallback) _extractFromRssStrategy(url),
+        if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
       ];
 
       for (final strategy in strategies) {
@@ -330,7 +540,7 @@ class Readability4JExtended {
           if (result != null && result.hasContent) {
             return result;
           }
-        } catch (_) {
+        } catch (e) {
           continue;
         }
       }
@@ -343,70 +553,103 @@ class Readability4JExtended {
   }
 
   /// Strategy 1: Default extraction with desktop user agent
-  Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(
-      String url) async {
+  Future<ArticleReadabilityResult?> _extractWithDefaultStrategy(String url) async {
     try {
       final headers = await _buildRequestHeaders(url);
       return await _extractContent(url, headers, 'Desktop');
     } catch (e) {
-      print('Error in _extractWithDefaultStrategy: $e');
       return null;
     }
   }
 
+  /// NEW STRATEGY: Try known subscriber RSS feeds
+  Future<ArticleReadabilityResult?> _extractFromKnownSubscriberFeeds(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+
+    for (final domain in _config.knownSubscriberFeeds.keys) {
+      if (uri.host.contains(domain)) {
+        final rssUrl = _config.knownSubscriberFeeds[domain]!;
+        
+        final rssContent = await _rssParser.extractFromRss(
+          rssUrl,
+          url,
+          isSubscriberFeed: true,
+        );
+        
+        if (rssContent != null && rssContent.hasContent) {
+          return _createResultFromRssContent(rssContent, 'Subscriber Feed');
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  /// NEW STRATEGY: Try authenticated RSS feeds
+  Future<ArticleReadabilityResult?> _extractFromAuthenticatedRssStrategy(String url) async {
+    try {
+      final authenticatedRssUrls = _generateAuthenticatedRssUrls(url);
+      
+      for (final rssUrl in authenticatedRssUrls) {
+        try {
+          final rssContent = await _rssParser.extractFromRss(
+            rssUrl,
+            url,
+            isSubscriberFeed: true,
+          );
+          
+          if (rssContent != null && rssContent.hasContent) {
+            return _createResultFromRssContent(rssContent, 'Authenticated RSS');
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    } catch (e) {
+      print('Authenticated RSS strategy failed: $e');
+    }
+    
+    return null;
+  }
+
+  /// Generate authenticated RSS URLs for subscriber content
+  List<String> _generateAuthenticatedRssUrls(String url) {
+    final uri = Uri.parse(url);
+    final baseUrl = '${uri.scheme}://${uri.host}';
+
+    return [
+      '$baseUrl/feed/?auth=true',
+      '$baseUrl/rss/?auth=true',
+      '$baseUrl/feed/subscribers',
+      '$baseUrl/rss/subscribers',
+      '$baseUrl/members/feed',
+      '$baseUrl/subscribers/feed',
+      '$baseUrl/premium/feed',
+      '$baseUrl/feed/?token=subscriber',
+      '$baseUrl/feed/?subscription=true',
+    ];
+  }
+
   /// Strategy 2: Extract with mobile user agent
-  Future<ArticleReadabilityResult?> _extractWithMobileStrategy(
-      String url) async {
+  Future<ArticleReadabilityResult?> _extractWithMobileStrategy(String url) async {
     try {
       final headers = await _buildRequestHeaders(url, mobile: true);
       return await _extractContent(url, headers, 'Mobile');
     } catch (e) {
-      print('Error in _extractWithMobileStrategy: $e');
       return null;
     }
   }
-  /// Extract article content from an existing HTML document (e.g., WebView DOM).
-  Future<ArticleReadabilityResult?> extractFromHtml(
-    String url,
-    String html, {
-    String strategyName = 'DOM',
-  }) async {
-    try {
-      final doc = html_parser.parse(html);
-      return _extractFromDocument(url, doc, strategyName);
-    } catch (_) {
-      return null;
-    }
-  }
-  /// Strategy 3: Try RSS feed for news sites
+
+  /// Strategy 3: Try regular RSS feed for news sites
   Future<ArticleReadabilityResult?> _extractFromRssStrategy(String url) async {
     final rssUrls = _generateRssUrls(url);
 
     for (final rssUrl in rssUrls) {
       try {
-        final rssHeaders = await _buildRequestHeaders(rssUrl);
-        final rssContent = await _rssParser.extractFromRss(
-          rssUrl,
-          url,
-          headers: rssHeaders,
-        );
+        final rssContent = await _rssParser.extractFromRss(rssUrl, url);
         if (rssContent != null && rssContent.hasContent) {
-          final metadata = _Metadata(
-            title: rssContent.title,
-            author: rssContent.author,
-            publishedDate: rssContent.publishedDate,
-            imageUrl: rssContent.imageUrl,
-          );
-
-          return ArticleReadabilityResult(
-            mainText: _normalizeWhitespace(rssContent.text),
-            imageUrl: metadata.imageUrl,
-            pageTitle: metadata.title,
-            isPaywalled: false,
-            source: 'RSS',
-            author: metadata.author,
-            publishedDate: metadata.publishedDate,
-          );
+          return _createResultFromRssContent(rssContent, 'RSS');
         }
       } catch (_) {
         continue;
@@ -416,7 +659,23 @@ class Readability4JExtended {
     return null;
   }
 
-  /// Generate possible RSS feed URLs for a given news URL
+  /// Create result from RSS content with subscription info
+  ArticleReadabilityResult _createResultFromRssContent(
+    _RssItemContent rssContent,
+    String source,
+  ) {
+    return ArticleReadabilityResult(
+      mainText: _normalizeWhitespace(rssContent.text),
+      imageUrl: rssContent.imageUrl,
+      pageTitle: rssContent.title,
+      isPaywalled: rssContent.isSubscriberContent,
+      source: rssContent.isSubscriberContent ? 'Subscriber $source' : source,
+      author: rssContent.author,
+      publishedDate: rssContent.publishedDate,
+    );
+  }
+
+  /// Enhanced RSS URL generation - FIXED VERSION
   List<String> _generateRssUrls(String url) {
     final uri = Uri.parse(url);
     final baseUrl = '${uri.scheme}://${uri.host}';
@@ -431,28 +690,56 @@ class Readability4JExtended {
       '$baseUrl/atom.xml',
       '$baseUrl/index.xml',
       '$baseUrl/?feed=rss',
+      '$baseUrl/feed/atom',
+      '$baseUrl/feed/rss2',
+      '$baseUrl/feed/atom.xml',
+      '$baseUrl/wp/feed',
+      '$baseUrl/wordpress/feed',
+      '$baseUrl/blog/feed',
+      '$baseUrl/news/feed',
     ];
 
-    if (path.contains('/news/')) {
-      final section = path.split('/')[1];
-      rssUrls.addAll([
-        '$baseUrl/$section/feed',
-        '$baseUrl/$section/rss',
-        if (path.split('/').length > 2)
-          '$baseUrl/category/${path.split('/')[2]}/feed',
-      ]);
+    // Section/category feeds - FIXED VARIABLE SCOPE
+    if (path.contains('/')) {
+      final segments = path.split('/').where((s) => s.isNotEmpty).toList();
+      if (segments.isNotEmpty) {
+        final section = segments.first;
+        rssUrls.addAll([
+          '$baseUrl/$section/feed',
+          '$baseUrl/$section/rss',
+          '$baseUrl/category/$section/feed',
+          '$baseUrl/tag/$section/feed',
+        ]);
+        
+        if (segments.length > 1) {
+          final subSection = segments[1];
+          rssUrls.addAll([
+            '$baseUrl/$section/$subSection/feed',
+            '$baseUrl/category/$subSection/feed',
+          ]);
+        }
+      }
     }
-
-    rssUrls.addAll([
-      '$baseUrl/?feed=rss2',
-      '$baseUrl/?feed=atom',
-    ]);
 
     return rssUrls;
   }
 
-  /// Common extraction logic - FIXED: JSON-LD extraction before cleaning
-    Future<ArticleReadabilityResult?> _extractContent(
+  /// Extract from existing HTML (e.g., WebView DOM)
+  Future<ArticleReadabilityResult?> extractFromHtml(
+    String url,
+    String html, {
+    String strategyName = 'DOM',
+  }) async {
+    try {
+      final doc = html_parser.parse(html);
+      return _extractFromDocument(url, doc, strategyName);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Common extraction logic
+  Future<ArticleReadabilityResult?> _extractContent(
     String url,
     Map<String, String> headers,
     String strategyName,
@@ -476,7 +763,6 @@ class Readability4JExtended {
     final pageUri = Uri.parse(url);
     final metadata = _extractMetadata(doc, pageUri);
 
-    // Extract JSON-LD BEFORE cleaning document (script tags will be removed)
     String? jsonLdContent = _extractJsonLdContent(doc);
 
     _cleanDocument(doc);
@@ -485,13 +771,11 @@ class Readability4JExtended {
     String? content;
     String? source = strategyName;
 
-    // Use JSON-LD content if available
     if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
       content = jsonLdContent.trim();
       source = 'JSON-LD';
     }
 
-    // If no JSON-LD, try normal article extraction
     if (content == null) {
       final articleRoot = _findArticleRoot(doc);
       if (articleRoot != null) {
@@ -508,7 +792,6 @@ class Readability4JExtended {
       }
     }
 
-    // Fallback to general text extraction
     if (content == null || content.isEmpty) {
       content = _extractFallbackText(doc);
     }
@@ -523,13 +806,60 @@ class Readability4JExtended {
       mainText: content,
       imageUrl: heroImage,
       pageTitle: metadata.title,
-      isPaywalled: isPaywalled,
-      source: source,
+      isPaywalled: isPaywalled || metadata.isSubscriberContent,
+      source: metadata.isSubscriberContent ? 'Subscriber $source' : source,
       author: metadata.author,
       publishedDate: metadata.publishedDate,
     );
   }
 
+  /// Enhanced metadata extraction
+  _Metadata _extractMetadata(dom.Document doc, Uri pageUri) {
+    final isSubscriberContent = _detectSubscriberMetadata(doc);
+    final feedType = _extractFeedType(doc);
+    
+    return _Metadata(
+      title: _extractTitle(doc),
+      author: _extractAuthor(doc),
+      publishedDate: _extractPublishedDate(doc),
+      imageUrl: _extractMetaImage(doc, pageUri),
+      isSubscriberContent: isSubscriberContent,
+      feedType: feedType,
+    );
+  }
+
+  /// Detect subscriber metadata
+  bool _detectSubscriberMetadata(dom.Document doc) {
+    final metaTags = [
+      'meta[property="article:content_tier"]',
+      'meta[name="subscription"]',
+      'meta[property="og:content_tier"]',
+    ];
+    
+    for (final selector in metaTags) {
+      final meta = doc.querySelector(selector);
+      if (meta != null) {
+        final content = meta.attributes['content']?.toLowerCase() ?? '';
+        if (content.contains('premium') || content.contains('subscriber')) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  /// Extract feed type from document
+  String? _extractFeedType(dom.Document doc) {
+    final link = doc.querySelector('link[type="application/rss+xml"]');
+    if (link != null) {
+      final title = link.attributes['title']?.toLowerCase() ?? '';
+      if (title.contains('subscriber') || title.contains('premium')) {
+        return 'Subscriber RSS';
+      }
+    }
+    return null;
+  }
 
   /// Fetch document with error handling
   Future<dom.Document?> _fetchDocument(
@@ -564,7 +894,8 @@ class Readability4JExtended {
       return null;
     }
   }
-   Future<dom.Document?> _maybeAppendNextPages(
+
+  Future<dom.Document?> _maybeAppendNextPages(
     dom.Document doc,
     Uri baseUri,
     Map<String, String> headers,
@@ -643,7 +974,8 @@ class Readability4JExtended {
 
     return null;
   }
-  /// Build request headers - FIXED NULL SAFETY
+
+  /// Build request headers
   Future<Map<String, String>> _buildRequestHeaders(
     String url, {
     bool mobile = false,
@@ -660,7 +992,6 @@ class Readability4JExtended {
       'Upgrade-Insecure-Requests': '1',
     };
 
-    // Add cookies
     final builtCookie =
         cookieHeaderBuilder != null ? await cookieHeaderBuilder!(url) : null;
 
@@ -672,12 +1003,10 @@ class Readability4JExtended {
       headers['Cookie'] = cookieString;
     }
 
-    // Add custom headers
     if (_config.customHeaders != null) {
       headers.addAll(_config.customHeaders!);
     }
 
-    // Add referer header
     final uri = Uri.parse(url);
     headers['Referer'] = '${uri.scheme}://${uri.host}';
 
@@ -699,16 +1028,6 @@ class Readability4JExtended {
     }
 
     _lastRequestTime[domain] = DateTime.now();
-  }
-
-  /// Extract metadata from document
-  _Metadata _extractMetadata(dom.Document doc, Uri pageUri) {
-    return _Metadata(
-      title: _extractTitle(doc),
-      author: _extractAuthor(doc),
-      publishedDate: _extractPublishedDate(doc),
-      imageUrl: _extractMetaImage(doc, pageUri),
-    );
   }
 
   /// Extract page title
@@ -879,7 +1198,6 @@ class Readability4JExtended {
 
   /// Clean document by removing noise elements
   void _cleanDocument(dom.Document doc) {
-    // DON'T remove JSON-LD scripts - they're already extracted
     final garbage = doc.querySelectorAll(
       'style,noscript,form,iframe,video,audio,svg,canvas',
     );
@@ -887,7 +1205,6 @@ class Readability4JExtended {
       node.remove();
     }
 
-    // Remove regular script tags but keep JSON-LD for now (will be removed later if needed)
     final scripts =
         doc.querySelectorAll('script:not([type="application/ld+json"])');
     for (final node in scripts) {
@@ -988,12 +1305,10 @@ class Readability4JExtended {
             }
           }
         } catch (e) {
-          print('JSON-LD parse error: $e');
           continue;
         }
       }
     } catch (e) {
-      print('JSON-LD extraction error: $e');
       return null;
     }
 
@@ -1304,27 +1619,23 @@ class Readability4JExtended {
     return lines.join('\n\n');
   }
 
-  /// Extract fallback text from document - FIXED VERSION
+  /// Extract fallback text from document
   String? _extractFallbackText(dom.Document doc) {
-    // First try to find any container with substantial text
     final allElements = doc.querySelectorAll('div, section, article, main');
     final candidates = <dom.Element>[];
 
     for (final el in allElements) {
       final text = el.text?.trim() ?? '';
       if (text.length > 150) {
-        // Lowered threshold for tests
         candidates.add(el);
       }
     }
 
     if (candidates.isNotEmpty) {
-      // Pick the element with the most text
       candidates
           .sort((a, b) => (b.text?.length ?? 0).compareTo(a.text?.length ?? 0));
       final best = candidates.first;
 
-      // Use _extractMainText if it has block elements, otherwise use its text
       final blocks =
           best.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote');
       if (blocks.isNotEmpty) {
@@ -1334,7 +1645,6 @@ class Readability4JExtended {
       }
     }
 
-    // Last resort: use body text
     final bodyText = doc.body?.text?.trim() ?? '';
     if (bodyText.isNotEmpty) {
       final normalized = _normalizeWhitespace(bodyText);
@@ -1351,14 +1661,12 @@ class Readability4JExtended {
 
     for (final url in urls) {
       try {
-        // Reset rate limiting for each URL to ensure parallel processing works
         final result = await extractMainContent(url);
         results.add(result);
       } catch (_) {
         results.add(null);
       }
 
-      // Don't delay on the last item
       if (url != urls.last) {
         await Future.delayed(_config.requestDelay);
       }
@@ -1374,15 +1682,21 @@ Readability4JExtended createReadabilityExtractor({
   Map<String, String>? customHeaders,
   Future<String?> Function(String url)? cookieHeaderBuilder,
   bool useMobileUserAgent = false,
+  bool attemptAuthenticatedRss = true,
   Duration requestDelay = const Duration(seconds: 2),
   Duration pageLoadDelay = Duration.zero,
   int paginationPageLimit = 3,
+  Map<String, String>? siteSpecificAuthHeaders,
+  Map<String, String>? knownSubscriberFeeds,
   http.Client? client,
 }) {
   final config = ReadabilityConfig(
     cookies: cookies,
     customHeaders: customHeaders,
+    siteSpecificAuthHeaders: siteSpecificAuthHeaders,
+    knownSubscriberFeeds: knownSubscriberFeeds,
     useMobileUserAgent: useMobileUserAgent,
+    attemptAuthenticatedRss: attemptAuthenticatedRss,
     requestDelay: requestDelay,
     pageLoadDelay: pageLoadDelay,
     paginationPageLimit: paginationPageLimit,

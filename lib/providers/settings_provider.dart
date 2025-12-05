@@ -106,6 +106,17 @@ Future<void> setArticleLimitPerFeed(int value) async {
     await prefs.setString(_kTranslateLangKey, code);
     notifyListeners();
   }
-
+  
   bool get isTranslateEnabled => _translateLangCode != 'off';
+}
+// Add this to your SettingsProvider or create a new SubscriptionProvider
+class SubscriptionProvider extends ChangeNotifier {
+  final Map<String, String> _subscribedFeeds = {};
+  
+  void addSubscribedFeed(String domain, String feedUrl) {
+    _subscribedFeeds[domain] = feedUrl;
+    notifyListeners();
+  }
+  
+  Map<String, String> get subscribedFeeds => Map.from(_subscribedFeeds);
 }
