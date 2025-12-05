@@ -889,8 +889,9 @@ class Readability4JExtended {
       final isTruncatedResult = bestResult == null ||
           (bestResult.mainText?.length ?? 0) < 1200 ||
           !bestResult.hasFullContent;
+      final allowRetry = _config.webViewMaxSnapshots > 1;
 
-      if (isTruncatedResult) {
+      if (isTruncatedResult && allowRetry) {
         final retryHtml = await _captureStabilizedHtml(
           url: url,
           headers: headers,
@@ -1442,7 +1443,7 @@ class Readability4JExtended {
   }) async {
     final headers = <String, String>{
       'User-Agent': mobile
-          ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
           : _config.userAgent,
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
