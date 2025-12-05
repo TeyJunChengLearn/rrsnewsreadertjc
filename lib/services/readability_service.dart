@@ -185,6 +185,11 @@ class ReadabilityConfig {
   final bool attemptAuthenticatedRss;
   final Duration requestDelay;
   final Duration pageLoadDelay;
+  final Duration webViewSnapshotInterval;
+  final Duration webViewMaxSnapshotDuration;
+  final Duration webViewRenderTimeoutBuffer;
+  final int webViewMaxSnapshots;
+  final double webViewChangeThreshold;
   final int paginationPageLimit;
   final bool useMobileUserAgent;
   final String userAgent;
@@ -200,6 +205,11 @@ class ReadabilityConfig {
     bool? attemptAuthenticatedRss,
     Duration? requestDelay,
     Duration? pageLoadDelay,
+    Duration? webViewSnapshotInterval,
+    Duration? webViewMaxSnapshotDuration,
+    Duration? webViewRenderTimeoutBuffer,
+    int? webViewMaxSnapshots,
+    double? webViewChangeThreshold,
     int? paginationPageLimit,
     bool? useMobileUserAgent,
     String? userAgent,
@@ -229,7 +239,15 @@ class ReadabilityConfig {
         attemptRssFallback = attemptRssFallback ?? true,
         attemptAuthenticatedRss = attemptAuthenticatedRss ?? true,
         requestDelay = requestDelay ?? const Duration(seconds: 2),
-        pageLoadDelay = pageLoadDelay ?? Duration.zero,
+        pageLoadDelay = pageLoadDelay ?? const Duration(seconds: 3),
+        webViewSnapshotInterval =
+            webViewSnapshotInterval ?? const Duration(seconds: 2),
+        webViewMaxSnapshotDuration =
+            webViewMaxSnapshotDuration ?? const Duration(seconds: 12),
+        webViewRenderTimeoutBuffer =
+            webViewRenderTimeoutBuffer ?? const Duration(seconds: 20),
+        webViewMaxSnapshots = webViewMaxSnapshots ?? 3,
+        webViewChangeThreshold = webViewChangeThreshold ?? 0.02,
         paginationPageLimit = paginationPageLimit ?? 3,
         useMobileUserAgent = useMobileUserAgent ?? false,
         userAgent = userAgent ??
@@ -786,7 +804,7 @@ class Readability4JExtended {
     }
   }
 
-/// Android-only strategy: render the page in an off-screen WebView so any
+  /// Android-only strategy: render the page in an off-screen WebView so any
   /// authenticated session cookies and JavaScript-rendered content are
   /// captured before running Readability.
   Future<ArticleReadabilityResult?> _extractWithAndroidWebView(String url) async {
@@ -800,12 +818,10 @@ class Readability4JExtended {
           ? _config.pageLoadDelay + const Duration(seconds: 3)
           : _config.pageLoadDelay;
 
-      final html = await _webViewExtractor?.renderPage(
-        url,
-        timeout: loadDelay + const Duration(seconds: 20),
-        postLoadDelay: loadDelay,
-        userAgent: headers['User-Agent'],
-        cookieHeader: headers['Cookie'],
+      final html = await _captureStabilizedHtml(
+        url: url,
+        headers: headers,
+        initialDelay: loadDelay,
       );
 
       if (html == null || html.isEmpty) return null;
@@ -818,6 +834,71 @@ class Readability4JExtended {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<String?> _captureStabilizedHtml({
+    required String url,
+    required Map<String, String> headers,
+    required Duration initialDelay,
+  }) async {
+    if (_webViewExtractor == null) return null;
+
+    final interval = _config.webViewSnapshotInterval;
+    final maxDuration = _config.webViewMaxSnapshotDuration;
+    final maxSnapshots = _config.webViewMaxSnapshots;
+    final stopwatch = Stopwatch()..start();
+
+    String? lastHtml;
+    String? stableHtml;
+
+    for (var attempt = 0; attempt < maxSnapshots; attempt++) {
+      final snapshotDelay = initialDelay + (interval * attempt);
+
+      final html = await _webViewExtractor!.renderPage(
+        url,
+        timeout: snapshotDelay + _config.webViewRenderTimeoutBuffer,
+        postLoadDelay: snapshotDelay,
+        userAgent: headers['User-Agent'],
+        cookieHeader: headers['Cookie'],
+      );
+
+      if (html == null || html.isEmpty) {
+        if (stopwatch.elapsed >= maxDuration) break;
+        continue;
+      }
+
+      if (lastHtml != null && !_hasSignificantDomChange(lastHtml, html)) {
+        stableHtml = html;
+        break;
+      }
+
+      stableHtml = html;
+      lastHtml = html;
+
+      final elapsed = stopwatch.elapsed;
+      if (attempt == maxSnapshots - 1 || elapsed >= maxDuration) {
+        break;
+      }
+
+      final remaining = maxDuration - elapsed;
+      final waitTime = remaining < interval ? remaining : interval;
+      if (waitTime > Duration.zero) {
+        await Future.delayed(waitTime);
+      }
+    }
+
+    return stableHtml;
+  }
+
+  bool _hasSignificantDomChange(String previous, String current) {
+    if (previous.isEmpty && current.isNotEmpty) return true;
+
+    final lengthDiff = (previous.length - current.length).abs();
+    final avgLength = (previous.length + current.length) / 2;
+
+    if (avgLength == 0) return false;
+
+    return (lengthDiff / avgLength) > _config.webViewChangeThreshold;
   }
 
   /// NEW STRATEGY: Try known subscriber RSS feeds
@@ -2263,7 +2344,12 @@ Readability4JExtended createReadabilityExtractor({
   bool useMobileUserAgent = false,
   bool attemptAuthenticatedRss = true,
   Duration requestDelay = const Duration(seconds: 2),
-  Duration pageLoadDelay = Duration.zero,
+  Duration pageLoadDelay = const Duration(seconds: 3),
+  Duration webViewSnapshotInterval = const Duration(seconds: 2),
+  Duration webViewMaxSnapshotDuration = const Duration(seconds: 12),
+  Duration webViewRenderTimeoutBuffer = const Duration(seconds: 20),
+  int webViewMaxSnapshots = 3,
+  double webViewChangeThreshold = 0.02,
   int paginationPageLimit = 3,
   Map<String, String>? siteSpecificAuthHeaders,
   Map<String, String>? knownSubscriberFeeds,
@@ -2278,6 +2364,11 @@ Readability4JExtended createReadabilityExtractor({
     attemptAuthenticatedRss: attemptAuthenticatedRss,
     requestDelay: requestDelay,
     pageLoadDelay: pageLoadDelay,
+    webViewSnapshotInterval: webViewSnapshotInterval,
+    webViewMaxSnapshotDuration: webViewMaxSnapshotDuration,
+    webViewRenderTimeoutBuffer: webViewRenderTimeoutBuffer,
+    webViewMaxSnapshots: webViewMaxSnapshots,
+    webViewChangeThreshold: webViewChangeThreshold,
     paginationPageLimit: paginationPageLimit,
   );
 
