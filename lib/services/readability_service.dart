@@ -82,8 +82,9 @@ class ArticleReadabilityResult {
     final text = mainText?.trim() ?? '';
     if (text.isEmpty) return false;
 
-    // Check length - teasers are usually < 600 characters
-    if (text.length < 600) return false;
+    // Lowered from 600 to 400 - some legitimate articles are short
+    // Especially after paywall removal, we should trust the content more
+    if (text.length < 400) return false;
 
     // Check for teaser indicators
     final lowerText = text.toLowerCase();
@@ -99,18 +100,27 @@ class ArticleReadabilityResult {
       'unlock full article',
     ];
 
+    // Only reject if teaser phrase appears at the END of content (likely a prompt)
+    // If it's in the middle, it might just be part of the article text
+    final last200 = text.length > 200 ? lowerText.substring(lowerText.length - 200) : lowerText;
+    var hasTeaserAtEnd = false;
     for (final phrase in teaserPhrases) {
-      if (lowerText.contains(phrase)) {
-        return false;  // Contains teaser phrase = not full content
+      if (last200.contains(phrase)) {
+        hasTeaserAtEnd = true;
+        break;
       }
     }
 
-    // Check if ends with ellipsis
-    if (text.endsWith('...') || text.endsWith('…')) {
+    if (hasTeaserAtEnd && text.length < 800) {
+      return false;  // Teaser phrase at end + short text = likely preview
+    }
+
+    // Check if ends with ellipsis (but only if text is short)
+    if ((text.endsWith('...') || text.endsWith('…')) && text.length < 800) {
       return false;
     }
 
-    // If paywalled but substantial and no teaser indicators, consider it full
+    // If paywalled but substantial and no clear teaser indicators, consider it full
     return true;
   }
 
@@ -654,9 +664,10 @@ class Readability4JExtended {
                 bestResult = result;
                 print('  Keeping as best result (authenticated user)');
 
-                // If we got substantial content (>800 chars), accept it
-                if (textLen > 800) {
-                  print('✓ Substantial content found, returning from "$source"');
+                // If we got substantial content (>500 chars for authenticated users), accept it
+                // Lowered from 800 to 500 since we have cookies and paywall removal
+                if (textLen > 500) {
+                  print('✓ Substantial content found (authenticated), returning from "$source"');
                   return result;
                 }
               }

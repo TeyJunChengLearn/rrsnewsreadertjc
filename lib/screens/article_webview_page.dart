@@ -366,8 +366,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
           onPageStarted: (_) {
             setState(() => _isLoading = true);
           },
-          onPageFinished: (_) {
+          onPageFinished: (url) async {
             setState(() => _isLoading = false);
+
+            // Automatically remove paywall overlays when page finishes loading
+            // This helps user see full content even when not in reader mode
+            await Future.delayed(const Duration(milliseconds: 1000));
+            await _removePaywallOverlays();
           },
         ),
       );
@@ -568,12 +573,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       'unlock full article',
     ];
 
-    final hasMarkers = previewMarkers.any(lower.contains);
+    // Check if markers appear at the END (last 200 chars), not anywhere in text
+    final last200 = trimmed.length > 200 ? lower.substring(lower.length - 200) : lower;
+    final hasMarkersAtEnd = previewMarkers.any(last200.contains);
     final trailingEllipsis = RegExp(r'(\.\.\.|…)$').hasMatch(trimmed);
 
-    if (hasMarkers || trailingEllipsis) return true;
+    // Only consider it preview if markers at end OR ellipsis with short content
+    if (hasMarkersAtEnd && wordCount < 200) return true;
+    if (trailingEllipsis && wordCount < 150) return true;
 
-    if (pagePaywalled && wordCount < 180) return true;
+    // Lowered from 180 to 100 - be more lenient for authenticated users
+    // After paywall removal, even short content should be considered valid
+    if (pagePaywalled && wordCount < 100) return true;
 
     return false;
   }
@@ -839,6 +850,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   Future<ArticleReadabilityResult?> _extractFromWebViewDom() async {
     try {
       await _waitForPageToSettle();
+
+      // Remove paywall overlays and unhide subscriber content before extraction
+      await _removePaywallOverlays();
+
+      // Small delay to let DOM settle after JavaScript manipulations
+      await Future.delayed(const Duration(milliseconds: 500));
+
       final raw = await _controller.runJavaScriptReturningResult(
         '(() => document.documentElement.outerHTML)();',
       );
@@ -852,7 +870,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       return await readability.extractFromHtml(
         widget.url,
         html,
-        strategyName: 'WebView DOM',
+        strategyName: 'WebView DOM (cleaned)',
       );
     } catch (_) {
       return null;
@@ -867,6 +885,95 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
 
     await Future.delayed(const Duration(milliseconds: 200));
+  }
+
+  /// Remove paywall overlays and unhide subscriber content in the live WebView
+  Future<void> _removePaywallOverlays() async {
+    try {
+      // Execute JavaScript to clean up paywall elements
+      await _controller.runJavaScript('''
+        (function() {
+          console.log('🔓 Removing paywall overlays...');
+
+          // Remove common paywall UI elements
+          const paywallSelectors = [
+            '[class*="paywall"]', '[id*="paywall"]',
+            '[class*="premium"]', '[class*="subscribe-modal"]',
+            '[class*="subscribe-prompt"]', '[class*="subscription-wall"]',
+            '.overlay', '.modal-backdrop', '.content-gate',
+            '[class*="registration-wall"]', '[class*="meter-"]',
+            '[class*="piano-"]', '[data-testid*="paywall"]'
+          ];
+
+          paywallSelectors.forEach(selector => {
+            try {
+              document.querySelectorAll(selector).forEach(el => {
+                // Only remove if it's a small UI element (likely overlay, not content)
+                const text = el.textContent?.trim() || '';
+                if (text.length < 500 ||
+                    text.toLowerCase().includes('subscribe') ||
+                    text.toLowerCase().includes('sign in')) {
+                  el.remove();
+                  console.log('Removed:', selector);
+                }
+              });
+            } catch(e) { }
+          });
+
+          // Remove blur/opacity effects
+          document.querySelectorAll('*').forEach(el => {
+            try {
+              const style = window.getComputedStyle(el);
+              if (style.filter && style.filter.includes('blur')) {
+                el.style.filter = 'none';
+                el.style.webkitFilter = 'none';
+              }
+              if (style.opacity === '0' || style.opacity < 0.3) {
+                el.style.opacity = '1';
+              }
+            } catch(e) { }
+          });
+
+          // Unhide subscriber/premium content
+          const contentSelectors = [
+            '.subscriber-content', '.premium-content',
+            '.locked-content', '.members-only',
+            '[data-subscriber="true"]', '[data-premium="true"]',
+            '[class*="subscriber-only"]', '[class*="premium-only"]',
+            '[style*="display: none"]', '[style*="display:none"]'
+          ];
+
+          contentSelectors.forEach(selector => {
+            try {
+              document.querySelectorAll(selector).forEach(el => {
+                el.style.display = 'block';
+                el.style.visibility = 'visible';
+                el.style.opacity = '1';
+                el.style.height = 'auto';
+                el.style.maxHeight = 'none';
+              });
+            } catch(e) { }
+          });
+
+          // Re-enable scrolling (paywalls often disable it)
+          document.body.style.overflow = 'auto';
+          document.documentElement.style.overflow = 'auto';
+
+          // Remove position:fixed that might be blocking content
+          document.querySelectorAll('[style*="position: fixed"], [style*="position:fixed"]').forEach(el => {
+            const text = el.textContent?.trim() || '';
+            if (text.length < 500 && (text.toLowerCase().includes('subscribe') || text.toLowerCase().includes('sign in'))) {
+              el.remove();
+            }
+          });
+
+          console.log('✓ Paywall cleanup complete');
+        })();
+      ''');
+    } catch (e) {
+      // Silently fail if JavaScript execution fails
+      print('Failed to remove paywall overlays: $e');
+    }
   }
 
   String? _normalizeJsString(dynamic raw) {
