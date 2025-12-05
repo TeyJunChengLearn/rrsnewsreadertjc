@@ -57,22 +57,19 @@ class AppBootstrap extends StatelessWidget {
 
         // In main.dart, update the Readability4JExtended provider
 // Update the Readability4JExtended provider in main.dart
-Provider<Readability4JExtended>(
-  create: (ctx) {
-    final cookieBridge = ctx.read<CookieBridge>();
-    return Readability4JExtended(
-      config: ReadabilityConfig(
-        pageLoadDelay: const Duration(seconds: 10),
-        useMobileUserAgent: true,
-        attemptAuthenticatedRss: true, // Enable new feature
-      ),
-      cookieHeaderBuilder: (url) async {
-        final cookieHeader = await cookieBridge.buildHeader(url);
-        return cookieHeader;
-      },
-    );
-  },
-),
+        Provider<Readability4JExtended>(
+          create: (ctx) {
+            final cookieBridge = ctx.read<CookieBridge>();
+            return Readability4JExtended(
+              config: ReadabilityConfig(
+                pageLoadDelay: const Duration(seconds: 10),
+                useMobileUserAgent: true,
+                attemptAuthenticatedRss: true,
+              ),
+              cookieHeaderBuilder: cookieBridge.buildHeader,
+            );
+          },
+        ),
 
         ProxyProvider2<Readability4JExtended, ArticleDao,
             ArticleContentService>(
@@ -84,7 +81,7 @@ Provider<Readability4JExtended>(
 
         // LOW LEVEL RSS
         Provider<RssService>(
-         create: (ctx) {
+          create: (ctx) {
             final cookieBridge = ctx.read<CookieBridge>();
             return RssService(
               fetcher: HttpFeedFetcher(
