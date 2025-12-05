@@ -61,4 +61,73 @@ class CookieBridge {
       return false;
     }
   }
+  Future<Map<String, String>> getAllCookiesForDomain(String url) async {
+    try {
+      final cookies = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getAllCookiesForDomain',
+        {'url': url},
+      );
+      
+      if (cookies == null) return {};
+      
+      // Convert to Map<String, String>
+      final result = <String, String>{};
+      cookies.forEach((key, value) {
+        if (key is String && value is String) {
+          result[key] = value;
+        }
+      });
+      
+      return result;
+    } on Exception catch (_) {
+      return {};
+    }
+  }
+
+  /// NEW: Check if we have subscription cookies for a domain
+  Future<bool> hasSubscriptionCookies(String url) async {
+    try {
+      final cookies = await getAllCookiesForDomain(url);
+      
+      const subscriptionCookieNames = [
+        'subscription',
+        'premium',
+        'member',
+        'subscriber',
+        'logged_in',
+        'session',
+        'auth',
+        'token',
+      ];
+      
+      return cookies.keys.any((key) {
+        final lowerKey = key.toLowerCase();
+        return subscriptionCookieNames.any((name) => lowerKey.contains(name));
+      });
+    } on Exception catch (_) {
+      return false;
+    }
+  }
+
+  /// NEW: Manually inject cookies for known paywall sites
+  Future<bool> injectPaywallCookies(String url) async {
+    final uri = Uri.parse(url);
+    final host = uri.host;
+    
+    // Known cookie patterns for bypassing paywalls
+    final cookiePatterns = {
+      'medium.com': '_uid=1; lightstep_guid/medium=1;',
+      'nytimes.com': 'nyt-a=1; nyt-gdpr=0;',
+      'bloomberg.com': 'session=test;',
+      'wsj.com': 'wsjregion=na;',
+    };
+    
+    for (final domain in cookiePatterns.keys) {
+      if (host.contains(domain)) {
+        return await setCookie(url, cookiePatterns[domain]!);
+      }
+    }
+    
+    return false;
+  }
 }

@@ -245,6 +245,11 @@ class RssFeedParser {
           );
         }
       }
+      } on http.ClientException {
+      // Network errors are expected sometimes (offline, paywalls, etc.).
+      // Treat them as a soft failure instead of spamming stdout so callers
+      // can fall back to other strategies quietly.
+      return null;
     } catch (e) {
       print('RSS parsing error: $e');
     }
@@ -510,13 +515,57 @@ class Readability4JExtended {
   final Future<String?> Function(String url)? cookieHeaderBuilder;
   final AndroidWebViewExtractor? _webViewExtractor;
   final Map<String, bool> _feedSubscriptionStatus = {};
-
+  final List<String> readerViewServices;
+  final List<String> archiveServices;
+  final bool enableSiteSpecificBypass;
+  final bool enableTranslateBypass;
+  final bool enableAmpCacheBypass;
+  final Map<String, Map<String, String>> siteSpecificHeaders;
+  final Duration bypassTimeout;
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
     this.cookieHeaderBuilder,
     AndroidWebViewExtractor? webViewExtractor,
-  })  : _client = client ?? http.Client(),
+    List<String>? readerViewServices,
+    List<String>? archiveServices,
+    bool? enableSiteSpecificBypass,
+    bool? enableTranslateBypass,
+    bool? enableAmpCacheBypass,
+    Map<String, Map<String, String>>? siteSpecificHeaders,
+    Duration? bypassTimeout,
+  })  : readerViewServices = readerViewServices ?? const [
+          'https://r.jina.ai/',
+          'https://textise.iitty.io/',
+          'https://outline.com/',
+        ],
+        archiveServices = archiveServices ?? const [
+          'https://archive.today/',
+          'https://archive.is/',
+          'https://web.archive.org/',
+        ],
+        enableSiteSpecificBypass = enableSiteSpecificBypass ?? true,
+        enableTranslateBypass = enableTranslateBypass ?? true,
+        enableAmpCacheBypass = enableAmpCacheBypass ?? true,
+        siteSpecificHeaders = siteSpecificHeaders ?? {
+          'nytimes.com': {
+            'Referer': 'https://www.google.com/',
+            'User-Agent': 'Googlebot/2.1',
+          },
+          'wsj.com': {
+            'Referer': 'https://www.facebook.com/',
+            'X-Forwarded-For': '31.13.66.35', // Facebook IP
+          },
+          'ft.com': {
+            'Referer': 'https://www.google.com/',
+            'X-Forwarded-For': '216.58.206.206',
+          },
+          'bloomberg.com': {
+            'User-Agent': 'Twitterbot/1.0',
+          },
+        },
+        bypassTimeout = bypassTimeout ?? const Duration(seconds: 10),
+        _client = client ?? http.Client(),
         _config = config ?? ReadabilityConfig(),
         _rssParser = RssFeedParser(
           client: client,
@@ -524,7 +573,653 @@ class Readability4JExtended {
           cookieHeaderBuilder: cookieHeaderBuilder,
         ),
         _webViewExtractor = webViewExtractor;
+  
+  Future<ArticleReadabilityResult?> _extractFromReaderView(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      final encodedUrl = Uri.encodeComponent(url);
+      
+      const readerServices = [
+        'https://r.jina.ai/',
+        'https://r.jina.ai/text', // Jina Reader
+        'https://mercury.postlight.com/parser?url=', // Mercury Parser (deprecated but may work)
+        'https://textise.iitty.io/?url=', // Textise
+        'https://textise.iitty.io/render?url=', // Textise alternative
+        'https://r.briefcake.com/', // Briefcake reader
+      ];
+      
+      for (final service in readerServices) {
+        try {
+          final readerUrl = '$service$encodedUrl';
+          final headers = await _buildRequestHeaders(readerUrl);
+          final response = await _client.get(Uri.parse(readerUrl), headers: headers);
+          
+          if (response.statusCode == 200) {
+            final doc = html_parser.parse(response.body);
+            final content = _extractReaderContent(doc);
+            
+            if (content != null && content.trim().isNotEmpty) {
+              return ArticleReadabilityResult(
+                mainText: content,
+                imageUrl: null,
+                pageTitle: _extractTitle(doc),
+                isPaywalled: false,
+                source: 'Reader View',
+                author: _extractAuthor(doc),
+                publishedDate: _extractPublishedDate(doc),
+              );
+            }
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
 
+  /// Extract content from reader view pages
+  String? _extractReaderContent(dom.Document doc) {
+    // Common reader view selectors
+    final readerSelectors = [
+      '#readability-page-1',
+      '.reader-content',
+      '.article-content',
+      '.post-content',
+      '.entry-content',
+      '.story-content',
+      '.article-body',
+      '.story-body',
+      '.article-text',
+      '#article-body',
+      '#story-body',
+      '.content-area',
+      '.main-content',
+      '.single-content',
+      '.article__content',
+      '.article__body',
+      '.article-content-wrapper',
+    ];
+    
+    for (final selector in readerSelectors) {
+      final element = doc.querySelector(selector);
+      if (element != null) {
+        return _extractMainText(element);
+      }
+    }
+    
+    // Fallback to finding largest text block
+    return _extractFallbackText(doc);
+  }
+
+  /// NEW: Try to fetch from archive services
+  Future<ArticleReadabilityResult?> _extractFromArchive(String url) async {
+    try {
+      final encodedUrl = Uri.encodeComponent(url);
+      
+      const archiveServices = [
+        'https://archive.today/?url=',
+        'https://archive.is/?run=1&url=',
+        'https://web.archive.org/web/',
+        'https://megalodon.jp/?url=',
+        'https://archive.ph/?url=',
+      ];
+      
+      for (final service in archiveServices) {
+        try {
+          // For web.archive.org, we need to fetch the latest snapshot
+          if (service.contains('web.archive.org')) {
+            final waybackUrl = 'https://archive.org/wayback/available?url=$encodedUrl';
+            final response = await _client.get(Uri.parse(waybackUrl));
+            
+            if (response.statusCode == 200) {
+              final json = jsonDecode(response.body);
+              if (json['archived_snapshots'] != null &&
+                  json['archived_snapshots']['closest'] != null) {
+                final snapshotUrl = json['archived_snapshots']['closest']['url'];
+                return await _extractContent(snapshotUrl, {}, 'Archive');
+              }
+            }
+          } else {
+            // Other archive services
+            final archiveUrl = '$service$encodedUrl';
+            return await _extractContent(archiveUrl, {}, 'Archive');
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// NEW: Try text-only version via Google Translate
+  Future<ArticleReadabilityResult?> _extractViaTranslate(String url) async {
+    try {
+      const translateBase = 'https://translate.google.com/translate?hl=en&sl=auto&tl=en&u=';
+      final encodedUrl = Uri.encodeComponent(url);
+      final translateUrl = '$translateBase$encodedUrl';
+      
+      final headers = await _buildRequestHeaders(translateUrl);
+      final response = await _client.get(Uri.parse(translateUrl), headers: headers);
+      
+      if (response.statusCode == 200) {
+        final doc = html_parser.parse(response.body);
+        
+        // Google Translate puts content in a specific frame
+        final iframe = doc.querySelector('iframe');
+        if (iframe != null) {
+          final src = iframe.attributes['src'];
+          if (src != null && src.isNotEmpty) {
+            final translatedResponse = await _client.get(Uri.parse(src), headers: headers);
+            if (translatedResponse.statusCode == 200) {
+              final translatedDoc = html_parser.parse(translatedResponse.body);
+              final content = _extractMainText(translatedDoc.body!);
+              
+              if (content != null && content.trim().isNotEmpty) {
+                return ArticleReadabilityResult(
+                  mainText: content,
+                  imageUrl: null,
+                  pageTitle: _extractTitle(doc),
+                  isPaywalled: false,
+                  source: 'Translate Bypass',
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// NEW: Add AMP/Google Cache bypass
+  Future<ArticleReadabilityResult?> _extractFromAmpOrCache(String url) async {
+    try {
+      final uri = Uri.parse(url);
+      
+      // Try AMP version if available
+      if (!uri.host.contains('cdn.ampproject.org')) {
+        final ampUrl = 'https://${uri.host}${uri.path}?amp=1';
+        final ampResult = await _extractContent(ampUrl, {}, 'AMP');
+        if (ampResult != null && ampResult.hasContent) {
+          return ampResult;
+        }
+      }
+      
+      // Try Google Cache
+      final cacheUrl = 'http://webcache.googleusercontent.com/search?q=cache:${Uri.encodeComponent(url)}';
+      final cacheResult = await _extractContent(cacheUrl, {}, 'Google Cache');
+      if (cacheResult != null && cacheResult.hasContent) {
+        return cacheResult;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// NEW: Try to fetch from text-based APIs
+  Future<ArticleReadabilityResult?> _extractFromTextApi(String url) async {
+    try {
+      // Textise API (unofficial)
+      const textiseApi = 'https://textise.iitty.io/api/render';
+      
+      final response = await _client.post(
+        Uri.parse(textiseApi),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'url': url}),
+      );
+      
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        final text = json['text']?.toString();
+        
+        if (text != null && text.trim().isNotEmpty) {
+          return ArticleReadabilityResult(
+            mainText: text.trim(),
+            imageUrl: null,
+            pageTitle: json['title']?.toString(),
+            isPaywalled: false,
+            source: 'Textise API',
+          );
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// NEW: Try to extract from site-specific bypass methods
+  Future<ArticleReadabilityResult?> _extractWithSiteSpecificBypass(String url) async {
+    final uri = Uri.parse(url);
+    final host = uri.host.toLowerCase();
+    
+    // New York Times specific bypass
+    if (host.contains('nytimes.com')) {
+      return await _extractNytimesContent(url);
+    }
+    
+    // Wall Street Journal specific bypass
+    if (host.contains('wsj.com')) {
+      return await _extractWsjContent(url);
+    }
+    
+    // Financial Times specific bypass
+    if (host.contains('ft.com')) {
+      return await _extractFtContent(url);
+    }
+    
+    // Bloomberg specific bypass
+    if (host.contains('bloomberg.com')) {
+      return await _extractBloombergContent(url);
+    }
+    
+    // Washington Post specific bypass
+    if (host.contains('washingtonpost.com')) {
+      return await _extractWapoContent(url);
+    }
+    
+    // Medium specific bypass
+    if (host.contains('medium.com')) {
+      return await _extractMediumContent(url);
+    }
+    
+    return null;
+  }
+
+  /// NYTimes specific bypass
+  Future<ArticleReadabilityResult?> _extractNytimesContent(String url) async {
+    try {
+      // Try Outline version
+      final outlineUrl = 'https://outline.com/${Uri.encodeComponent(url)}';
+      final outlineResult = await _extractContent(outlineUrl, {}, 'Outline');
+      if (outlineResult != null && outlineResult.hasContent) {
+        return outlineResult;
+      }
+      
+      // Try with different user agents
+      final headers = {
+        ...await _buildRequestHeaders(url),
+        'User-Agent': 'Googlebot/2.1 (+http://www.google.com/bot.html)',
+        'Referer': 'https://www.google.com/',
+      };
+      
+      return await _extractContent(url, headers, 'NYTimes Bypass');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Wall Street Journal specific bypass
+  Future<ArticleReadabilityResult?> _extractWsjContent(String url) async {
+    try {
+      // Try Facebook referrer trick
+      final headers = {
+        ...await _buildRequestHeaders(url),
+        'Referer': 'https://www.facebook.com/',
+      };
+      
+      return await _extractContent(url, headers, 'WSJ Bypass');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Financial Times specific bypass
+  Future<ArticleReadabilityResult?> _extractFtContent(String url) async {
+    try {
+      // Try with Google search referrer
+      final headers = {
+        ...await _buildRequestHeaders(url),
+        'Referer': 'https://www.google.com/search?q=',
+        'X-Forwarded-For': '216.58.206.206', // Google IP
+      };
+      
+      return await _extractContent(url, headers, 'FT Bypass');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Bloomberg specific bypass
+  Future<ArticleReadabilityResult?> _extractBloombergContent(String url) async {
+    try {
+      // Try AMP version
+      final ampUrl = url.replaceAll('www.bloomberg.com', 'www.bloomberg.com/amp');
+      return await _extractContent(ampUrl, {}, 'Bloomberg AMP');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Washington Post specific bypass
+  Future<ArticleReadabilityResult?> _extractWapoContent(String url) async {
+    try {
+      // Try with Apple News user agent
+      final headers = {
+        ...await _buildRequestHeaders(url),
+        'User-Agent': 'AppleNews/1.0.1',
+        'Referer': 'https://apple.news/',
+      };
+      
+      return await _extractContent(url, headers, 'WaPo Bypass');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Medium specific bypass
+  Future<ArticleReadabilityResult?> _extractMediumContent(String url) async {
+    try {
+      // Try to fetch via RSS
+      final uri = Uri.parse(url);
+      final storyId = uri.pathSegments.last;
+      
+      if (storyId.isNotEmpty) {
+        final rssUrl = 'https://medium.com/feed/@${uri.pathSegments[1] ?? "feed"}';
+        final rssContent = await _rssParser.extractFromRss(rssUrl, url);
+        
+        if (rssContent != null && rssContent.hasContent) {
+          return _createResultFromRssContent(rssContent, 'Medium RSS');
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  /// NEW: Enhanced paywall detection removal
+  void _enhancedRemovePaywallElements(dom.Document doc) {
+    final enhancedSelectors = [
+      // Original selectors
+      '[class*="paywall"]',
+      '[id*="paywall"]',
+      '[class*="premium"]',
+      '[id*="premium"]',
+      '[class*="locked"]',
+      '[id*="locked"]',
+      '[class*="restricted"]',
+      '[class*="members-only"]',
+      '[class*="subscribe"]',
+      '[class*="register"]',
+      
+      // New enhanced selectors
+      '[class*="overlay"]', // Common for paywall overlays
+      '[class*="modal"]', // Modal paywalls
+      '[class*="dialog"]',
+      '[class*="popup"]',
+      '[class*="gate"]', // Content gates
+      '[class*="teaser"]', // Teaser content
+      '[class*="blur"]', // Blurred content
+      '[class*="obscure"]',
+      '[class*="partial"]', // Partial content
+      '[class*="snippet"]',
+      '[class*="preview"]',
+      '[data-paywall]',
+      '[data-premium]',
+      '[data-locked]',
+      '[data-gate]',
+      '.paywall-container',
+      '.paywall-wrapper',
+      '.subscription-wall',
+      '.membership-gate',
+      '.content-gate',
+      '.article-teaser',
+      '.preview-content',
+      '.truncated-content',
+      '.blurred-text',
+      '.faded-content',
+      '.locked-article',
+      '.paid-content',
+      '.metered-content',
+      '.registration-required',
+      '.sign-in-wall',
+      '.login-wall',
+      '.overlay-container',
+      '.modal-backdrop',
+      '.paywall-overlay',
+      '.gate-container',
+      // Remove scripts that might enable paywalls
+      'script[src*="paywall"]',
+      'script[src*="premium"]',
+      'script[src*="subscription"]',
+      'link[href*="paywall"]',
+    ];
+    
+    for (final selector in enhancedSelectors) {
+      try {
+        final elements = doc.querySelectorAll(selector);
+        for (final el in elements) {
+          el.remove();
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    
+    // Also remove style attributes that might hide content
+    final allElements = doc.querySelectorAll('[style]');
+    for (final element in allElements) {
+      final style = element.attributes['style']?.toLowerCase() ?? '';
+      if (style.contains('blur') || 
+          style.contains('opacity: 0') ||
+          style.contains('display: none') ||
+          style.contains('visibility: hidden') ||
+          style.contains('filter: blur')) {
+        element.remove();
+      }
+    }
+  }
+
+  /// NEW: Modify the main extraction method to include all bypass strategies
+  Future<ArticleReadabilityResult?> extractMainContent(String url) async {
+    try {
+      await _respectRateLimit(url);
+
+      // Enhanced strategy list with all bypass methods
+      final strategies = [
+        // Site-specific bypasses (try first)
+        () => _extractWithSiteSpecificBypass(url),
+        
+        // Android WebView (if available)
+        if (_webViewExtractor != null) () => _extractWithAndroidWebView(url),
+        
+        // Reader view services
+        () => _extractFromReaderView(url),
+        
+        // Archive services
+        () => _extractFromArchive(url),
+        
+        // Text APIs
+        () => _extractFromTextApi(url),
+        
+        // AMP/Google Cache
+        () => _extractFromAmpOrCache(url),
+        
+        // Google Translate trick
+        () => _extractViaTranslate(url),
+        
+        // Default strategies
+        () => _extractWithDefaultStrategy(url),
+        () => _extractFromKnownSubscriberFeeds(url),
+        
+        // Mobile strategy
+        if (_config.useMobileUserAgent) () => _extractWithMobileStrategy(url),
+        
+        // RSS strategies
+        if (_config.attemptRssFallback) () => _extractFromRssStrategy(url),
+        if (_config.attemptAuthenticatedRss) () => _extractFromAuthenticatedRssStrategy(url),
+      ];
+
+      // Try each strategy
+      for (final strategy in strategies) {
+        try {
+          final result = await strategy();
+          if (result != null && result.hasContent) {
+            // If content was paywalled but we got it, mark as bypassed
+            if (result.isPaywalled == true) {
+              return ArticleReadabilityResult(
+                mainText: result.mainText,
+                imageUrl: result.imageUrl,
+                pageTitle: result.pageTitle,
+                isPaywalled: false, // Mark as bypassed
+                source: '${result.source} (Paywall Bypassed)',
+                author: result.author,
+                publishedDate: result.publishedDate,
+              );
+            }
+            return result;
+          }
+        } catch (e) {
+          // Silently continue to next strategy
+          continue;
+        }
+      }
+
+      return null;
+    } catch (e) {
+      print('Error extracting content from $url: $e');
+      return null;
+    }
+  }
+
+  /// NEW: Enhanced content extraction with better paywall handling
+  ArticleReadabilityResult? _extractFromDocument(
+    String url,
+    dom.Document doc,
+    String strategyName,
+  ) {
+    // Use enhanced paywall removal
+    _enhancedRemovePaywallElements(doc);
+    
+    // Rest of existing method remains the same...
+    final isPaywalled = _detectPaywall(doc);
+    final pageUri = Uri.parse(url);
+    final metadata = _extractMetadata(doc, pageUri);
+
+    String? jsonLdContent = _extractJsonLdContent(doc);
+
+    _cleanDocument(doc);
+    
+    // Additional cleanup for common paywall patterns
+    _removeCommonPaywallPatterns(doc);
+
+    String? content;
+    String? source = strategyName;
+
+    if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
+      content = jsonLdContent.trim();
+      source = 'JSON-LD';
+    }
+
+    if (content == null) {
+      final articleRoot = _findArticleRoot(doc);
+      if (articleRoot != null) {
+        final text = _extractMainText(articleRoot);
+        content = _normalizeWhitespace(text);
+
+        if (_isContentTruncated(content)) {
+          final hiddenContent = _extractHiddenContent(articleRoot);
+          if (hiddenContent != null && hiddenContent.length > content.length) {
+            content = hiddenContent;
+            source = 'Hidden Content';
+          }
+        }
+      }
+    }
+
+    if (content == null || content.isEmpty) {
+      content = _extractFallbackText(doc);
+    }
+
+    if (content == null || content.isEmpty) {
+      return null;
+    }
+
+    final heroImage = _extractHeroImage(doc, pageUri);
+
+    return ArticleReadabilityResult(
+      mainText: content,
+      imageUrl: heroImage,
+      pageTitle: metadata.title,
+      isPaywalled: isPaywalled || metadata.isSubscriberContent,
+      source: metadata.isSubscriberContent ? 'Subscriber $source' : source,
+      author: metadata.author,
+      publishedDate: metadata.publishedDate,
+    );
+  }
+
+  /// NEW: Remove common paywall patterns from text
+  void _removeCommonPaywallPatterns(dom.Document doc) {
+    // Remove text nodes containing paywall messages
+    final walker = dom.NodeWalker(doc.body!);
+    while (walker.next() != null) {
+      final node = walker.current;
+      if (node is dom.Text) {
+        final text = node.text;
+        if (_isPaywallMessage(text)) {
+          node.remove();
+        }
+      }
+    }
+    
+    // Remove empty paragraphs that might be from paywalls
+    final emptyPs = doc.querySelectorAll('p, div').where((element) {
+      final text = element.text?.trim() ?? '';
+      return text.isEmpty || 
+             text.length < 10 || 
+             _isPaywallMessage(text);
+    }).toList();
+    
+    for (final element in emptyPs) {
+      element.remove();
+    }
+  }
+
+  /// NEW: Enhanced paywall message detection
+  bool _isPaywallMessage(String text) {
+    const paywallPhrases = [
+      'subscribe to read',
+      'continue reading',
+      'premium content',
+      'members only',
+      'subscriber exclusive',
+      'to read the full story',
+      'unlock this article',
+      'support our journalism',
+      'become a member',
+      'already a subscriber',
+      'log in to read',
+      'sign up to continue',
+      'free articles remaining',
+      'article limit reached',
+      'metered paywall',
+      'registration required',
+      'please subscribe',
+      'join today',
+      'read this story for free',
+      'thanks for reading',
+      'read more with subscription',
+      'this article is for subscribers',
+      'you\'ve reached your article limit',
+      'your free articles have expired',
+    ];
+    
+    final lowerText = text.toLowerCase();
+    return paywallPhrases.any((phrase) => lowerText.contains(phrase));
+  }
   /// Main extraction method with subscription awareness
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     try {
@@ -1015,7 +1710,7 @@ class Readability4JExtended {
   }) async {
     final headers = <String, String>{
       'User-Agent': mobile
-          ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
           : _config.userAgent,
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

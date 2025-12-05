@@ -2,8 +2,43 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:flutter_rss_reader/services/android_webview_extractor.dart';
+
 import 'package:flutter_rss_reader/services/readability_service.dart';
 
+
+class _FakeWebViewExtractor extends AndroidWebViewExtractor {
+  String? lastUrl;
+  String? lastCookieHeader;
+  String? lastUserAgent;
+
+  @override
+  Future<String?> renderPage(
+    String url, {
+    Duration timeout = const Duration(seconds: 15),
+    Duration postLoadDelay = Duration.zero,
+    String? userAgent,
+    String? cookieHeader,
+  }) async {
+    lastUrl = url;
+    lastCookieHeader = cookieHeader;
+    lastUserAgent = userAgent;
+
+    return '''
+      <html>
+        <head>
+          <title>Rendered page</title>
+          <meta property="og:image" content="/hero.jpg" />
+        </head>
+        <body>
+          <article>
+            <p>Body text rendered inside the WebView.</p>
+          </article>
+        </body>
+      </html>
+    ''';
+  }
+}
 void main() {
   group('Readability4JExtended', () {
     test('returns main text and lead image when available', () async {
@@ -77,6 +112,36 @@ void main() {
       await readability.extractMainContent('https://paywalled.example.com');
 
       expect(capturedCookie, 'auth=subscriber');
+    });
+
+
+test('prefers the WebView strategy and forwards cookies + user agent',
+        () async {
+      final fakeWebView = _FakeWebViewExtractor();
+
+      final client = MockClient((_) async => http.Response('', 500));
+
+      final readability = Readability4JExtended(
+        client: client,
+        webViewExtractor: fakeWebView,
+        cookieHeaderBuilder: (_) async => 'session=webview-user',
+        config: ReadabilityConfig(
+          useMobileUserAgent: true,
+          pageLoadDelay: const Duration(seconds: 1),
+        ),
+      );
+
+      final result =
+          await readability.extractMainContent('https://example.com/story');
+
+      expect(result, isNotNull);
+      expect(result!.mainText, 'Body text rendered inside the WebView.');
+      expect(result.imageUrl, 'https://example.com/hero.jpg');
+      expect(result.source, 'Android WebView');
+      expect(fakeWebView.lastUrl, 'https://example.com/story');
+      expect(fakeWebView.lastCookieHeader, 'session=webview-user');
+      expect(fakeWebView.lastUserAgent,
+          contains('Chrome/125.0.0.0 Mobile Safari/537.36'));
     });
 
     test('falls back to metadata image when article root is missing', () async {

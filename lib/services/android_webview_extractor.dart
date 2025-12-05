@@ -43,4 +43,70 @@ class AndroidWebViewExtractor {
       return null;
     }
   }
+  Future<String?> renderPageEnhanced(
+    String url, {
+    Duration timeout = const Duration(seconds: 20),
+    Duration postLoadDelay = const Duration(seconds: 3),
+    String? userAgent,
+    String? cookieHeader,
+    List<String>? javascriptToExecute,
+    bool removePaywalls = true,
+  }) async {
+    try {
+      final html = await _channel.invokeMethod<String>('renderPageEnhanced', {
+        'url': url,
+        'timeoutMs': timeout.inMilliseconds,
+        'postLoadDelayMs': postLoadDelay.inMilliseconds,
+        'userAgent': userAgent,
+        'cookieHeader': cookieHeader,
+        'javascriptToExecute': javascriptToExecute ?? _getDefaultJavascript(),
+        'removePaywalls': removePaywalls,
+      });
+
+      return html;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  List<String> _getDefaultJavascript() {
+    return [
+      // Remove common paywall elements
+      '''
+      document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe"]').forEach(el => el.remove());
+      ''',
+      // Remove overlays
+      '''
+      document.querySelectorAll('.overlay, .modal, .dialog, [class*="gate"]').forEach(el => el.remove());
+      ''',
+      // Remove blur effects
+      '''
+      document.querySelectorAll('*').forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.filter.includes('blur') || style.webkitFilter.includes('blur')) {
+          el.style.filter = 'none';
+          el.style.webkitFilter = 'none';
+        }
+      });
+      ''',
+      // Remove display:none on content
+      '''
+      document.querySelectorAll('[style*="display:none"], [style*="visibility:hidden"]').forEach(el => {
+        el.style.display = 'block';
+        el.style.visibility = 'visible';
+      });
+      ''',
+      // Click any "continue reading" buttons
+      '''
+      document.querySelectorAll('button, a').forEach(btn => {
+        const text = btn.textContent.toLowerCase();
+        if (text.includes('continue reading') || text.includes('read more')) {
+          btn.click();
+        }
+      });
+      ''',
+    ];
+  }
 }
