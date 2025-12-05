@@ -587,6 +587,7 @@ class Readability4JExtended {
   final ReadabilityConfig _config;
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
+  final Map<String, Future<ArticleReadabilityResult?>> _inflightExtractions = {};
   final Future<String?> Function(String url)? cookieHeaderBuilder;
   final AndroidWebViewExtractor? _webViewExtractor;
   final Map<String, bool> _feedSubscriptionStatus = {};
@@ -607,6 +608,23 @@ class Readability4JExtended {
 
   /// Main extraction method with subscription awareness
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
+    final inFlight = _inflightExtractions[url];
+    if (inFlight != null) {
+      print('🔄 Reusing in-flight readability extraction for $url');
+      return inFlight;
+    }
+
+    final future = _extractMainContentInternal(url);
+    _inflightExtractions[url] = future;
+
+    try {
+      return await future;
+    } finally {
+      _inflightExtractions.remove(url);
+    }
+  }
+
+  Future<ArticleReadabilityResult?> _extractMainContentInternal(String url) async {
     try {
       await _respectRateLimit(url);
 
