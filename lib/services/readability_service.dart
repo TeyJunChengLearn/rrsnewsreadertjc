@@ -196,6 +196,7 @@ class ReadabilityConfig {
   final Map<String, String> siteSpecificAuthHeaders;
   final Map<String, String> knownSubscriberFeeds;
   final Map<String, bool> cookieAuthOverrides;
+  final Map<String, List<String>> siteSpecificAuthCookiePatterns;
 
   ReadabilityConfig({
     Map<String, String>? cookies,
@@ -216,6 +217,7 @@ class ReadabilityConfig {
     Map<String, String>? siteSpecificAuthHeaders,
     Map<String, String>? knownSubscriberFeeds,
     Map<String, bool>? cookieAuthOverrides,
+    Map<String, List<String>>? siteSpecificAuthCookiePatterns,
   })  : cookies = cookies,
         customHeaders = customHeaders,
         paywallKeywords = paywallKeywords ??
@@ -266,7 +268,8 @@ class ReadabilityConfig {
               'reuters.com': 'https://www.reutersagency.com/feed/',
               'apnews.com': 'https://apnews.com/feed',
             },
-        cookieAuthOverrides = cookieAuthOverrides ?? {};
+        cookieAuthOverrides = cookieAuthOverrides ?? {},
+        siteSpecificAuthCookiePatterns = siteSpecificAuthCookiePatterns ?? {};
 }
 
 /// Enhanced RSS feed parser with subscription detection
@@ -738,18 +741,32 @@ class Readability4JExtended {
 
   /// Check if we have authentication cookies for this URL
   Future<bool> _hasAuthCookies(String url) async {
-    if (cookieHeaderBuilder == null) return false;
+    String? cookies;
 
     try {
-      final cookies = await cookieHeaderBuilder!(url);
-      if (cookies == null || cookies.isEmpty) {
+      if (cookieHeaderBuilder != null) {
+        cookies = await cookieHeaderBuilder!(url);
+      }
+
+      cookies ??= _config.customHeaders?['Cookie'];
+
+      if ((cookies == null || cookies.isEmpty) &&
+          _config.cookies != null &&
+          _config.cookies!.isNotEmpty) {
+        cookies =
+            _config.cookies!.entries.map((e) => '${e.key}=${e.value}').join('; ');
+      }
+
+      if (cookies == null || cookies.trim().isEmpty) {
         print('🔐 No cookies found for $url');
         return false;
       }
 
+      final normalizedCookies = cookies.trim();
+
       // Check for common auth cookie patterns
-      final lowerCookies = cookies.toLowerCase();
-      const authPatterns = [
+      final lowerCookies = normalizedCookies.toLowerCase();
+      final authPatterns = <String>[
         'session',
         'auth',
         'token',
@@ -760,8 +777,20 @@ class Readability4JExtended {
         'premium',
       ];
 
+      final host = Uri.tryParse(url)?.host;
+
+      if (host != null && _config.siteSpecificAuthCookiePatterns.isNotEmpty) {
+        for (final entry in _config.siteSpecificAuthCookiePatterns.entries) {
+          if (host == entry.key || host.endsWith(entry.key)) {
+            authPatterns
+                .addAll(entry.value.map((pattern) => pattern.toLowerCase()));
+          }
+        }
+      }
+
       final hasAuth = authPatterns.any((pattern) => lowerCookies.contains(pattern));
-      final cookiePreview = cookies.substring(0, cookies.length > 100 ? 100 : cookies.length);
+      final cookiePreview = normalizedCookies
+          .substring(0, normalizedCookies.length > 100 ? 100 : normalizedCookies.length);
       if (hasAuth) {
         print('🔐 Auth-like cookies detected for $url');
         print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
@@ -769,7 +798,6 @@ class Readability4JExtended {
         print('🔐 Cookies present without auth patterns for $url');
         print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
       }
-      final host = Uri.tryParse(url)?.host;
 
       bool? override;
       if (host != null && _config.cookieAuthOverrides.isNotEmpty) {
