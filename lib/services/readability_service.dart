@@ -7,6 +7,46 @@ import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 import 'android_webview_extractor.dart';
 
+/// Check if text looks like a paywall message rather than article content
+bool _isPaywallMessage(String text) {
+  if (text.length > 500) return false; // Long text is probably real content
+
+  const paywallPhrases = [
+    'subscribe to read',
+    'continue reading',
+    'members only',
+    'sign in to read',
+    'login to continue',
+    'become a member',
+    'join now',
+    'subscribe now',
+    'unlock this article',
+    'this article is for subscribers',
+    'get unlimited access',
+    'start your subscription',
+  ];
+
+  final lowerText = text.toLowerCase();
+
+  // Check if the text is SHORT and primarily a paywall message
+  // For short text (< 200 chars), it should be mostly just the paywall phrase
+  if (text.length < 200) {
+    return paywallPhrases.any((phrase) => lowerText.contains(phrase));
+  }
+
+  // For longer text, only flag it if it's PREDOMINANTLY about subscribing
+  // (multiple paywall phrases or a very high density of paywall words)
+  var paywallPhraseCount = 0;
+  for (final phrase in paywallPhrases) {
+    if (lowerText.contains(phrase)) {
+      paywallPhraseCount++;
+    }
+  }
+
+  // If it has 2+ paywall phrases, it's probably a paywall message
+  return paywallPhraseCount >= 2;
+}
+
 /// Result of readability extraction: main article text + optional hero image.
 class ArticleReadabilityResult {
   final String? mainText;
@@ -42,8 +82,9 @@ class ArticleReadabilityResult {
     final text = mainText?.trim() ?? '';
     if (text.isEmpty) return false;
 
-    // Check length - teasers are usually < 600 characters
-    if (text.length < 600) return false;
+    // Lowered from 600 to 400 - some legitimate articles are short
+    // Especially after paywall removal, we should trust the content more
+    if (text.length < 400) return false;
 
     // Check for teaser indicators
     final lowerText = text.toLowerCase();
@@ -59,18 +100,27 @@ class ArticleReadabilityResult {
       'unlock full article',
     ];
 
+    // Only reject if teaser phrase appears at the END of content (likely a prompt)
+    // If it's in the middle, it might just be part of the article text
+    final last200 = text.length > 200 ? lowerText.substring(lowerText.length - 200) : lowerText;
+    var hasTeaserAtEnd = false;
     for (final phrase in teaserPhrases) {
-      if (lowerText.contains(phrase)) {
-        return false;  // Contains teaser phrase = not full content
+      if (last200.contains(phrase)) {
+        hasTeaserAtEnd = true;
+        break;
       }
     }
 
-    // Check if ends with ellipsis
-    if (text.endsWith('...') || text.endsWith('…')) {
+    if (hasTeaserAtEnd && text.length < 800) {
+      return false;  // Teaser phrase at end + short text = likely preview
+    }
+
+    // Check if ends with ellipsis (but only if text is short)
+    if ((text.endsWith('...') || text.endsWith('…')) && text.length < 800) {
       return false;
     }
 
-    // If paywalled but substantial and no teaser indicators, consider it full
+    // If paywalled but substantial and no clear teaser indicators, consider it full
     return true;
   }
 
@@ -477,19 +527,6 @@ class RssFeedParser {
     return _normalizeWhitespace(buffer.toString());
   }
 
-  bool _isPaywallMessage(String text) {
-    const paywallPhrases = [
-      'subscribe to read',
-      'continue reading',
-      'premium content',
-      'members only',
-      'subscriber exclusive',
-    ];
-    
-    final lowerText = text.toLowerCase();
-    return paywallPhrases.any((phrase) => lowerText.contains(phrase));
-  }
-
   String? _extractImageUrl(XmlElement item) {
     final mediaContent = item.findElements('content', namespace: 'media');
     for (final content in mediaContent) {
@@ -573,16 +610,36 @@ class Readability4JExtended {
     try {
       await _respectRateLimit(url);
 
-      final strategies = [
-        if (_webViewExtractor != null) _extractWithAndroidWebView(url),
-        _extractWithDefaultStrategy(url),
-        _extractFromKnownSubscriberFeeds(url),
-        if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
-        if (_config.attemptRssFallback) _extractFromRssStrategy(url),
-        if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
-      ];
+      // Check if we have authentication cookies for this domain
+      final hasCookies = await _hasAuthCookies(url);
 
-      ArticleReadabilityResult? bestPartialResult;
+      // For authenticated users, prioritize WebView rendering to get full JS-rendered content
+      final strategies = <Future<ArticleReadabilityResult?>>[];
+
+      if (hasCookies && _webViewExtractor != null) {
+        // Authenticated: WebView FIRST to get subscriber content
+        strategies.addAll([
+          _extractWithAndroidWebView(url),
+          _extractFromKnownSubscriberFeeds(url),
+          _extractWithDefaultStrategy(url),
+          if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
+          if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
+          if (_config.attemptRssFallback) _extractFromRssStrategy(url),
+        ]);
+      } else {
+        // Not authenticated: standard extraction order
+        strategies.addAll([
+          if (_webViewExtractor != null) _extractWithAndroidWebView(url),
+          _extractWithDefaultStrategy(url),
+          _extractFromKnownSubscriberFeeds(url),
+          if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
+          if (_config.attemptRssFallback) _extractFromRssStrategy(url),
+          if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
+        ]);
+      }
+
+      ArticleReadabilityResult? bestResult;
+      var bestLength = 0;
 
       for (final strategy in strategies) {
         try {
@@ -594,16 +651,33 @@ class Readability4JExtended {
 
             print('Strategy "$source" extracted $textLen chars (paywalled: $isPaywalled, full: ${result.hasFullContent})');
 
-            // If we found full content, return immediately
+            // Priority 1: If we found full content (not a teaser), return immediately
             if (result.hasFullContent) {
               print('✓ Returning full content from "$source"');
               return result;
             }
-            // Keep the best partial result (longest text) as fallback
-            if (bestPartialResult == null ||
-                (result.mainText?.length ?? 0) > (bestPartialResult.mainText?.length ?? 0)) {
-              bestPartialResult = result;
-              print('  Keeping as best partial result');
+
+            // Priority 2: For authenticated users, keep tracking longest content
+            if (hasCookies) {
+              if (textLen > bestLength) {
+                bestLength = textLen;
+                bestResult = result;
+                print('  Keeping as best result (authenticated user)');
+
+                // If we got substantial content (>500 chars for authenticated users), accept it
+                // Lowered from 800 to 500 since we have cookies and paywall removal
+                if (textLen > 500) {
+                  print('✓ Substantial content found (authenticated), returning from "$source"');
+                  return result;
+                }
+              }
+            } else {
+              // Priority 3: Not authenticated, keep best partial result
+              if (textLen > bestLength) {
+                bestLength = textLen;
+                bestResult = result;
+                print('  Keeping as best partial result');
+              }
             }
           }
         } catch (e) {
@@ -611,14 +685,53 @@ class Readability4JExtended {
         }
       }
 
-      // Return best partial result if we didn't find full content
-      if (bestPartialResult != null) {
-        print('⚠ No full content found, returning best partial (${bestPartialResult.mainText?.length ?? 0} chars from ${bestPartialResult.source})');
+      // Return best result we found
+      if (bestResult != null) {
+        final resultLen = bestResult.mainText?.length ?? 0;
+        print('⚠ No full content found, returning best partial ($resultLen chars from ${bestResult.source})');
       }
-      return bestPartialResult;
+      return bestResult;
     } catch (e) {
       print('Error extracting content from $url: $e');
       return null;
+    }
+  }
+
+  /// Check if we have authentication cookies for this URL
+  Future<bool> _hasAuthCookies(String url) async {
+    if (cookieHeaderBuilder == null) return false;
+
+    try {
+      final cookies = await cookieHeaderBuilder!(url);
+      if (cookies == null || cookies.isEmpty) {
+        print('🔐 No cookies found for $url');
+        return false;
+      }
+
+      // Check for common auth cookie patterns
+      final lowerCookies = cookies.toLowerCase();
+      const authPatterns = [
+        'session',
+        'auth',
+        'token',
+        'logged',
+        'user',
+        'member',
+        'subscriber',
+        'premium',
+      ];
+
+      final hasAuth = authPatterns.any((pattern) => lowerCookies.contains(pattern));
+      if (hasAuth) {
+        print('🔐 Auth cookies detected for $url');
+        print('   Cookie preview: ${cookies.substring(0, cookies.length > 100 ? 100 : cookies.length)}${cookies.length > 100 ? '...' : ''}');
+      } else {
+        print('🔐 Cookies found but no auth patterns detected for $url');
+      }
+      return hasAuth;
+    } catch (e) {
+      print('🔐 Error checking cookies: $e');
+      return false;
     }
   }
 
@@ -640,10 +753,16 @@ class Readability4JExtended {
       final headers =
           await _buildRequestHeaders(url, mobile: _config.useMobileUserAgent);
 
+      // Check if we have authentication cookies - give more time for authenticated pages
+      final hasCookies = headers['Cookie']?.isNotEmpty ?? false;
+      final loadDelay = hasCookies
+          ? _config.pageLoadDelay + const Duration(seconds: 3)
+          : _config.pageLoadDelay;
+
       final html = await _webViewExtractor?.renderPage(
         url,
-        timeout: _config.pageLoadDelay + const Duration(seconds: 15),
-        postLoadDelay: _config.pageLoadDelay,
+        timeout: loadDelay + const Duration(seconds: 20),
+        postLoadDelay: loadDelay,
         userAgent: headers['User-Agent'],
         cookieHeader: headers['Cookie'],
       );
@@ -653,7 +772,7 @@ class Readability4JExtended {
       return await extractFromHtml(
         url,
         html,
-        strategyName: 'Android WebView',
+        strategyName: hasCookies ? 'Authenticated WebView' : 'Android WebView',
       );
     } catch (_) {
       return null;
@@ -863,24 +982,42 @@ class Readability4JExtended {
 
     String? jsonLdContent = _extractJsonLdContent(doc);
 
+    // IMPORTANT: Try to extract hidden subscriber content BEFORE cleaning
+    // Many paywalled sites hide the full content in CSS-hidden elements
+    String? hiddenSubscriberContent;
+    if (isPaywalled || metadata.isSubscriberContent) {
+      hiddenSubscriberContent = _extractFromHiddenElements(doc.body ?? doc.documentElement!);
+    }
+
     _cleanDocument(doc);
     _removePaywallElements(doc);
 
     String? content;
     String? source = strategyName;
 
+    // Priority 1: JSON-LD structured data
     if (jsonLdContent != null && jsonLdContent.trim().isNotEmpty) {
       content = jsonLdContent.trim();
       source = 'JSON-LD';
     }
 
+    // Priority 2: Hidden subscriber content (often the most complete)
+    if (hiddenSubscriberContent != null &&
+        hiddenSubscriberContent.length > (content?.length ?? 0)) {
+      content = hiddenSubscriberContent;
+      source = 'Hidden Subscriber Content';
+    }
+
+    // Priority 3: Regular article extraction
     if (content == null) {
       final articleRoot = _findArticleRoot(doc);
       if (articleRoot != null) {
         final text = _extractMainText(articleRoot);
         content = _normalizeWhitespace(text);
 
-        if (_isContentTruncated(content)) {
+        // If content looks truncated or is too short, try hidden content
+        final contentTooShort = content.isEmpty || content.length < 400;
+        if (_isContentTruncated(content) || contentTooShort) {
           final hiddenContent = _extractHiddenContent(articleRoot);
           if (hiddenContent != null && hiddenContent.length > content.length) {
             content = hiddenContent;
@@ -890,8 +1027,18 @@ class Readability4JExtended {
       }
     }
 
+    // Priority 4: Fallback text extraction
     if (content == null || content.isEmpty) {
       content = _extractFallbackText(doc);
+    }
+
+    // If we found hidden subscriber content earlier but it was shorter,
+    // use it now if the extracted content is still too short
+    if ((content == null || content.length < 400) &&
+        hiddenSubscriberContent != null &&
+        hiddenSubscriberContent.length > 300) {
+      content = hiddenSubscriberContent;
+      source = 'Hidden Subscriber Content';
     }
 
     if (content == null || content.isEmpty) {
@@ -1338,31 +1485,36 @@ class Readability4JExtended {
     }
   }
 
-  /// Remove paywall-specific elements
+  /// Remove paywall-specific elements (but preserve those with actual content)
   void _removePaywallElements(dom.Document doc) {
-    final paywallSelectors = [
-      '[class*="paywall"]',
-      '[id*="paywall"]',
-      '[class*="premium"]',
-      '[id*="premium"]',
-      '[class*="locked"]',
-      '[id*="locked"]',
-      '[class*="restricted"]',
-      '[class*="members-only"]',
-      '[class*="subscribe"]',
-      '[class*="register"]',
-      '.paywall',
-      '.premium-content',
-      '.content-locked',
-      '.article-locked',
-      '.blurred',
-      '.obscured',
+    // Only remove obvious paywall UI elements, not content containers
+    final paywallUISelectors = [
+      '.paywall-message',
+      '.paywall-overlay',
+      '.paywall-banner',
+      '.subscribe-prompt',
+      '.subscribe-button',
+      '.register-prompt',
+      '.login-prompt',
+      '.membership-prompt',
+      '[class*="paywall-popup"]',
+      '[class*="subscribe-modal"]',
+      '.blurred-overlay',
+      '.content-gate',
     ];
 
-    for (final selector in paywallSelectors) {
-      final elements = doc.querySelectorAll(selector);
-      for (final el in elements) {
-        el.remove();
+    for (final selector in paywallUISelectors) {
+      try {
+        final elements = doc.querySelectorAll(selector);
+        for (final el in elements) {
+          // Only remove if it's actually a UI element (short text)
+          final text = el.text?.trim() ?? '';
+          if (text.length < 300 || _isPaywallMessage(text)) {
+            el.remove();
+          }
+        }
+      } catch (e) {
+        continue;
       }
     }
   }
@@ -1436,8 +1588,9 @@ class Readability4JExtended {
     return false;
   }
 
-  /// Extract hidden content from data attributes
+  /// Extract hidden content from data attributes and CSS-hidden elements
   String? _extractHiddenContent(dom.Element root) {
+    // Try data attributes first
     final dataElements =
         root.querySelectorAll('[data-content], [data-article], [data-text]');
 
@@ -1450,11 +1603,149 @@ class Readability4JExtended {
       }
     }
 
+    // Try CSS-hidden elements that might contain full subscriber content
+    final hiddenContent = _extractFromHiddenElements(root);
+    if (hiddenContent != null && hiddenContent.length > 100) {
+      return hiddenContent;
+    }
+
     return null;
+  }
+
+  /// Extract content from CSS-hidden elements (display:none, visibility:hidden, etc.)
+  String? _extractFromHiddenElements(dom.Element root) {
+    // Look for elements that are commonly used to hide subscriber content
+    final hiddenSelectors = [
+      // Inline style hiding
+      '[style*="display: none"]',
+      '[style*="display:none"]',
+      '[style*="visibility: hidden"]',
+      '[style*="visibility:hidden"]',
+      '[style*="opacity: 0"]',
+      '[style*="opacity:0"]',
+      '[style*="height: 0"]',
+      '[style*="height:0"]',
+
+      // Generic classes
+      '.hidden-content',
+      '.locked-content',
+      '.premium-content',
+      '.subscriber-content',
+      '.member-content',
+      '.paywalled-content',
+      '.article-content-premium',
+      '.full-article-hidden',
+      '[aria-hidden="true"]',
+      '.js-hidden',
+      '.no-js-hide',
+
+      // Malaysiakini specific
+      '.subscriber-only',
+      '.premium-article-content',
+      '[data-subscriber="true"]',
+      '[data-premium="true"]',
+
+      // Common subscription site patterns
+      '.paywall-content',
+      '.gated-content',
+      '.registration-required',
+      '.auth-required',
+      '.logged-in-content',
+      '[data-auth-required]',
+      '[data-subscription-required]',
+
+      // Data attributes that might hold full content
+      '[data-full-content]',
+      '[data-article-content]',
+      '[data-body-text]',
+    ];
+
+    String? bestContent;
+    var bestLength = 0;
+
+    for (final selector in hiddenSelectors) {
+      try {
+        final elements = root.querySelectorAll(selector);
+        for (final el in elements) {
+          // First check if the entire element is just a paywall message
+          final fullText = el.text?.trim() ?? '';
+          if (fullText.isNotEmpty && _isPaywallMessage(fullText)) {
+            continue; // Skip entire element if it's a paywall message
+          }
+
+          // Extract text from paragraphs within hidden elements
+          final paragraphs = el.querySelectorAll('p');
+          if (paragraphs.isNotEmpty) {
+            final buffer = StringBuffer();
+            var hasRealContent = false;
+
+            for (final p in paragraphs) {
+              final text = p.text?.trim() ?? '';
+              if (text.isEmpty) continue;
+
+              // Skip if this specific paragraph is a paywall message
+              if (_isPaywallMessage(text)) continue;
+
+              if (buffer.isNotEmpty) buffer.write('\n\n');
+              buffer.write(text);
+              hasRealContent = true;
+            }
+
+            if (hasRealContent) {
+              final extracted = buffer.toString();
+              if (extracted.length > bestLength) {
+                bestLength = extracted.length;
+                bestContent = extracted;
+              }
+            }
+          } else {
+            // No paragraphs, just get the text
+            if (fullText.length > bestLength && !_isPaywallMessage(fullText)) {
+              bestLength = fullText.length;
+              bestContent = fullText;
+            }
+          }
+        }
+      } catch (e) {
+        // Selector might not work, continue with next one
+        continue;
+      }
+    }
+
+    return bestContent != null && bestContent.isNotEmpty
+        ? _normalizeWhitespace(bestContent)
+        : null;
   }
 
   /// Find the main article root element
   dom.Element? _findArticleRoot(dom.Document doc) {
+    // Site-specific selectors for known subscription sites
+    final siteSpecificSelectors = _getSiteSpecificSelectors(doc);
+    if (siteSpecificSelectors.isNotEmpty) {
+      for (final selector in siteSpecificSelectors) {
+        try {
+          final elements = doc.querySelectorAll(selector);
+          if (elements.isNotEmpty) {
+            // Return the one with most content
+            dom.Element? best;
+            var bestScore = 0;
+            for (final el in elements) {
+              final score = _calculateElementScore(el);
+              if (score > bestScore) {
+                bestScore = score;
+                best = el;
+              }
+            }
+            if (best != null && bestScore >= 30) {
+              return best;
+            }
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+
     final prioritySelectors = [
       'article',
       'main',
@@ -1577,6 +1868,13 @@ class Readability4JExtended {
       if (text.isEmpty) continue;
 
       if (seenTexts.contains(text)) continue;
+
+      // Skip blocks that are inside hidden/paywall elements
+      if (_isInsideHiddenOrPaywallElement(block)) continue;
+
+      // Skip if it's a paywall message
+      if (_isPaywallMessage(text)) continue;
+
       seenTexts.add(text);
 
       if (block.localName?.startsWith('h') ?? false) {
@@ -1588,6 +1886,148 @@ class Readability4JExtended {
     }
 
     return buffer.toString();
+  }
+
+  /// Get site-specific content selectors based on the page URL/domain
+  List<String> _getSiteSpecificSelectors(dom.Document doc) {
+    // Try to detect site from meta tags or URL patterns
+    final ogSiteName = doc.querySelector('meta[property="og:site_name"]')?.attributes['content']?.toLowerCase() ?? '';
+    final url = doc.querySelector('link[rel="canonical"]')?.attributes['href']?.toLowerCase() ?? '';
+    final domain = doc.querySelector('meta[property="og:url"]')?.attributes['content']?.toLowerCase() ?? '';
+
+    final siteIdentifier = '$ogSiteName $url $domain'.toLowerCase();
+
+    // Malaysiakini
+    if (siteIdentifier.contains('malaysiakini') || siteIdentifier.contains('mkini')) {
+      return [
+        '.article-content',
+        '.article__content',
+        '.content-body',
+        '.story-content',
+        '#article-content',
+        '[itemprop="articleBody"]',
+        '.field-name-body',
+        '.article-wrapper',
+      ];
+    }
+
+    // The Star (Malaysia)
+    if (siteIdentifier.contains('thestar') && siteIdentifier.contains('.my')) {
+      return [
+        '.story-body',
+        '.article-body',
+        '[itemprop="articleBody"]',
+        '.story__body',
+      ];
+    }
+
+    // New York Times
+    if (siteIdentifier.contains('nytimes')) {
+      return [
+        '.article-body',
+        '[name="articleBody"]',
+        'section[name="articleBody"]',
+        '.StoryBodyCompanionColumn',
+      ];
+    }
+
+    // Washington Post
+    if (siteIdentifier.contains('washingtonpost')) {
+      return [
+        '.article-body',
+        '[data-qa="article-body"]',
+        '.paywall-window',
+      ];
+    }
+
+    // Medium
+    if (siteIdentifier.contains('medium.com')) {
+      return [
+        'article section',
+        '[data-selectable-paragraph]',
+        '.postArticle-content',
+      ];
+    }
+
+    // Bloomberg
+    if (siteIdentifier.contains('bloomberg')) {
+      return [
+        '.article-body',
+        '[data-component="article-body"]',
+        '.body-content',
+      ];
+    }
+
+    // Wall Street Journal
+    if (siteIdentifier.contains('wsj.com')) {
+      return [
+        '.article-content',
+        '[class*="article-body"]',
+        '.wsj-snippet-body',
+      ];
+    }
+
+    // Financial Times
+    if (siteIdentifier.contains('ft.com')) {
+      return [
+        '.article__content-body',
+        '[data-trackable="article-body"]',
+        '.article-body',
+      ];
+    }
+
+    // The Guardian
+    if (siteIdentifier.contains('theguardian')) {
+      return [
+        '[data-gu-name="body"]',
+        '.article-body-commercial-selector',
+        '.content__article-body',
+      ];
+    }
+
+    // Reuters
+    if (siteIdentifier.contains('reuters')) {
+      return [
+        '[data-testid="ArticleBody"]',
+        '.article-body',
+        '.StandardArticleBody_body',
+      ];
+    }
+
+    return [];
+  }
+
+  /// Check if an element is inside a hidden or paywall container
+  bool _isInsideHiddenOrPaywallElement(dom.Element element) {
+    var current = element.parent;
+    while (current != null) {
+      // Check for hidden styles
+      final style = current.attributes['style']?.toLowerCase() ?? '';
+      if (style.contains('display:none') ||
+          style.contains('display: none') ||
+          style.contains('visibility:hidden') ||
+          style.contains('visibility: hidden')) {
+        return true;
+      }
+
+      // Check for paywall-related classes (but only UI elements, not content containers)
+      final className = current.className.toLowerCase();
+      final paywallUIClasses = [
+        'paywall-message',
+        'paywall-overlay',
+        'subscribe-prompt',
+        'subscribe-button',
+      ];
+
+      for (final paywallClass in paywallUIClasses) {
+        if (className.contains(paywallClass)) {
+          return true;
+        }
+      }
+
+      current = current.parent;
+    }
+    return false;
   }
 
   /// Extract hero image from document

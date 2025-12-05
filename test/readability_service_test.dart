@@ -137,7 +137,7 @@ test('prefers the WebView strategy and forwards cookies + user agent',
       expect(result, isNotNull);
       expect(result!.mainText, 'Body text rendered inside the WebView.');
       expect(result.imageUrl, 'https://example.com/hero.jpg');
-      expect(result.source, 'Android WebView');
+      expect(result.source, 'Authenticated WebView'); // Changed: now detects auth cookies
       expect(fakeWebView.lastUrl, 'https://example.com/story');
       expect(fakeWebView.lastCookieHeader, 'session=webview-user');
       expect(fakeWebView.lastUserAgent,
@@ -411,6 +411,156 @@ test('prefers the WebView strategy and forwards cookies + user agent',
           await readability.extractMainContent('https://example.com/error');
 
       expect(result, isNull);
+    });
+
+    test('extracts full content from CSS-hidden subscriber elements', () async {
+      const html = '''
+        <html>
+          <head>
+            <title>Subscriber Article</title>
+            <meta property="article:content_tier" content="premium" />
+          </head>
+          <body>
+            <article>
+              <p>This is just a teaser. The article continues below...</p>
+              <div class="premium-content" style="display: none;">
+                <p>This is the full subscriber content that is hidden behind CSS. It contains the complete article text that subscribers can see. This content is much longer than the teaser and provides the full story with all the important details and analysis.</p>
+                <p>Multiple paragraphs of premium content continue here with more detailed information that only subscribers should have access to.</p>
+                <p>Even more content to ensure we capture everything from the hidden subscriber section.</p>
+              </div>
+              <div class="paywall-message">
+                <p>Subscribe to read the full article.</p>
+              </div>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability.extractMainContent(
+        'https://example.com/subscriber-article',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.isPaywalled, true);
+      expect(result.mainText, contains('full subscriber content'));
+      expect(result.mainText, contains('premium content continue here'));
+      expect(result.mainText, isNot(contains('Subscribe to read')));
+      expect(result.source, contains('Subscriber'));
+    });
+
+    test('extracts content from visibility:hidden elements', () async {
+      const html = '''
+        <html>
+          <body>
+            <article>
+              <p>Short teaser text...</p>
+              <div class="locked-content" style="visibility: hidden;">
+                <p>This is the complete article text that is hidden from non-subscribers. It contains all the information that makes up the full article content with proper details and analysis.</p>
+                <p>Additional paragraphs with more detailed subscriber-only information.</p>
+              </div>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability.extractMainContent(
+        'https://example.com/locked-article',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.mainText, contains('complete article text'));
+      expect(result.mainText, contains('subscriber-only information'));
+    });
+
+    test('extracts content from aria-hidden subscriber sections', () async {
+      const html = '''
+        <html>
+          <body>
+            <article>
+              <p>Article preview text here...</p>
+              <div class="subscriber-content" aria-hidden="true">
+                <p>Full article content for subscribers goes here with all the details. This section contains the complete story with comprehensive coverage and analysis that is only available to paying members.</p>
+                <p>More paragraphs of exclusive subscriber content continue throughout this section.</p>
+              </div>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability.extractMainContent(
+        'https://example.com/aria-hidden-article',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.mainText, contains('Full article content for subscribers'));
+      expect(result.mainText, contains('exclusive subscriber content'));
+    });
+
+    test('prioritizes longer hidden content over visible teaser', () async {
+      const html = '''
+        <html>
+          <body>
+            <article>
+              <p>This is a short teaser that ends abruptly...</p>
+              <p>To continue reading, please subscribe.</p>
+              <div class="hidden-content" style="display: none;">
+                <p>This is a short teaser that ends abruptly...</p>
+                <p>But here is the rest of the article with much more content. This section contains extensive details, analysis, and information that provides the complete picture. Multiple paragraphs of valuable content continue here with quotes, data, and expert opinions.</p>
+                <p>Even more comprehensive coverage continues in additional paragraphs throughout this hidden section.</p>
+                <p>The article concludes with final thoughts and recommendations for readers.</p>
+              </div>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability.extractMainContent(
+        'https://example.com/hidden-full-article',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.mainText, contains('rest of the article'));
+      expect(result.mainText, contains('expert opinions'));
+      expect(result.mainText, contains('final thoughts'));
+      expect(result.mainText!.length, greaterThan(400));
+    });
+
+    test('does not extract paywall UI messages as content', () async {
+      const html = '''
+        <html>
+          <body>
+            <article>
+              <p>Article content goes here with enough text to be considered valid content. This is a proper article with multiple sentences and paragraphs.</p>
+              <div class="premium-content" style="display: none;">
+                <p>Subscribe now to unlock this article and get unlimited access!</p>
+              </div>
+            </article>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability.extractMainContent(
+        'https://example.com/article-with-paywall-ui',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.mainText, contains('Article content goes here'));
+      expect(result.mainText, isNot(contains('Subscribe now to unlock')));
     });
   });
 }
