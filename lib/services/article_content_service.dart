@@ -53,6 +53,43 @@ class ArticleContentService {
 
     return updated;
   }
+
+  Future<void> saveExtractedContent({
+    required String articleId,
+    String? mainText,
+    String? imageUrl,
+  }) async {
+    final trimmedText = mainText?.trim() ?? '';
+    final trimmedImage = imageUrl?.trim() ?? '';
+
+    if (trimmedText.isEmpty && trimmedImage.isEmpty) return;
+
+    final existing = await articleDao.findById(articleId);
+    if (existing == null) return;
+
+    final updates = <String, String?>{};
+    final currentText = (existing.mainText ?? '').trim();
+    if (trimmedText.isNotEmpty) {
+      final needsBetterText =
+          _looksLikeTeaser(currentText) || trimmedText.length > currentText.length;
+      if (needsBetterText) {
+        updates['mainText'] = trimmedText;
+      }
+    }
+
+    final hasImage = (existing.imageUrl ?? '').trim().isNotEmpty;
+    if (!hasImage && trimmedImage.isNotEmpty) {
+      updates['imageUrl'] = trimmedImage;
+    }
+
+    if (updates.isEmpty) return;
+
+    await articleDao.updateContent(
+      articleId,
+      updates['mainText'],
+      updates['imageUrl'],
+    );
+  }
 }
 
 bool _looksLikeTeaser(String? text) {

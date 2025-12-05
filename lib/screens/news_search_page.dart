@@ -92,6 +92,7 @@ class _SearchRow extends StatelessWidget {
   Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => ArticleWebviewPage(
+        articleId: item.id,
         url: item.link!,
         title: item.title,
       ),

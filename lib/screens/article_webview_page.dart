@@ -11,6 +11,7 @@ import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../providers/settings_provider.dart';
+import '../services/article_content_service.dart';
 import '../services/readability_service.dart';
 
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
@@ -205,11 +206,13 @@ String _normalizeForTts(String text, String langCode) {
 class ArticleWebviewPage extends StatefulWidget {
   final String url;
   final String? title; // optional RSS/article title to include in reading
+  final String? articleId;
 
   const ArticleWebviewPage({
     super.key,
     required this.url,
     this.title,
+    this.articleId,
   });
 
   @override
@@ -840,11 +843,31 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         ..addAll(combined);
       _currentLine = 0;
     });
+
+    unawaited(_persistReadabilityResult(result));
   }
   bool _looksLikePreview(ArticleReadabilityResult result) {
     final text = (result.mainText ?? '').trim();
     if (text.isEmpty) return true;
     return _isLikelyPreviewText(text, result.isPaywalled ?? false);
+  }
+
+  Future<void> _persistReadabilityResult(
+      ArticleReadabilityResult? result) async {
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return;
+    if (result == null) return;
+
+    try {
+      final contentService = context.read<ArticleContentService>();
+      await contentService.saveExtractedContent(
+        articleId: articleId,
+        mainText: result.mainText,
+        imageUrl: result.imageUrl,
+      );
+    } catch (_) {
+      // ignore persistence failures in the foreground reader
+    }
   }
 
   Future<ArticleReadabilityResult?> _extractFromWebViewDom() async {
