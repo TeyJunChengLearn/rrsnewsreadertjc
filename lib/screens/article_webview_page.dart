@@ -234,6 +234,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isLoading = true;
   bool _readerOn = false;
   bool _paywallLikely = false;
+  bool _readerHintVisible = false;
+  bool _readerHintDismissed = false;
   // Reader content (one line per highlightable/speakable chunk)
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
@@ -832,6 +834,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         _paywallLikely = false;
         _lines.clear();
         _currentLine = 0;
+        _readerHintVisible = false;
       });
       return;
     }
@@ -869,6 +872,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         ..clear()
         ..addAll(combined);
       _currentLine = 0;
+      _readerHintVisible = !_readerOn && !_readerHintDismissed;
     });
   }
 
@@ -1107,6 +1111,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _readerOn = !_readerOn;
       if (_readerOn) {
         _hasInternalPageInHistory = true;
+        _readerHintVisible = false;
+      } else if (_lines.isNotEmpty && !_readerHintDismissed) {
+        _readerHintVisible = true;
       }
     });
 
@@ -1212,6 +1219,77 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (_readerHintVisible && !_readerOn)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 90,
+                child: SafeArea(
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 250),
+                    opacity: _readerHintVisible ? 1 : 0,
+                    child: Material(
+                      elevation: 10,
+                      borderRadius: BorderRadius.circular(14),
+                      color:
+                          Theme.of(context).colorScheme.surface.withOpacity(0.97),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: _toggleReader,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 14),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.chrome_reader_mode),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'Reader view ready',
+                                      style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Tap to open a clean, readability-powered view of this page.',
+                                      style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurface
+                                            .withOpacity(0.8),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Dismiss reader hint',
+                                icon: const Icon(Icons.close),
+                                onPressed: () {
+                                  setState(() {
+                                    _readerHintDismissed = true;
+                                    _readerHintVisible = false;
+                                  });
+                                },
+                              ),
+                            ],
                           ),
                         ),
                       ),
