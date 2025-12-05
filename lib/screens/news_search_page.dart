@@ -86,19 +86,21 @@ class _SearchRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       onTap: () {
-  // optional: mark read
-  rss.markRead(item);
-  if (item.link == null || item.link!.isEmpty) return;
-  Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => ArticleWebviewPage(
-        articleId: item.id,
-        url: item.link!,
-        title: item.title,
-      ),
-    ),
-  );
-},
+        // optional: mark read
+        rss.markRead(item);
+        if (item.link == null || item.link!.isEmpty) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ArticleWebviewPage(
+              articleId: item.id,
+              url: item.link!,
+              title: item.title,
+              initialMainText: item.mainText,
+              initialImageUrl: item.imageUrl,
+            ),
+          ),
+        );
+      },
 
     );
   }

@@ -11,7 +11,7 @@ import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../providers/settings_provider.dart';
-import '../services/article_content_service.dart';
+import '../services/article_dao.dart';
 import '../services/readability_service.dart';
 
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
@@ -207,12 +207,16 @@ class ArticleWebviewPage extends StatefulWidget {
   final String url;
   final String? title; // optional RSS/article title to include in reading
   final String? articleId;
+  final String? initialMainText;
+  final String? initialImageUrl;
 
   const ArticleWebviewPage({
     super.key,
     required this.url,
     this.title,
     this.articleId,
+    this.initialMainText,
+    this.initialImageUrl,
   });
 
   @override
@@ -232,7 +236,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
   int _currentLine = 0;
-  bool _triedDomExtraction = false;
   // Hero image from Readability result (used in reader HTML)
   String? _heroImageUrl;
 
@@ -765,56 +768,66 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   // --------------- TTS playback ---------------
 
-  /// Ensure we have extracted article text (Readability) for TTS/translate,
-  /// no matter which mode (reader vs full web) we are in.
+  Future<ArticleReadabilityResult?> _loadCachedContent() async {
+    final cachedText = widget.initialMainText?.trim() ?? '';
+    final cachedImage = widget.initialImageUrl?.trim() ?? '';
+    if (cachedText.isNotEmpty || cachedImage.isNotEmpty) {
+      return ArticleReadabilityResult(
+        mainText: cachedText.isNotEmpty ? cachedText : null,
+        imageUrl: cachedImage.isNotEmpty ? cachedImage : null,
+        pageTitle: widget.title,
+      );
+    }
+
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return null;
+
+    try {
+      final dao = context.read<ArticleDao>();
+      final row = await dao.findById(articleId);
+      if (row == null) return null;
+
+      final storedText = row.mainText?.trim() ?? '';
+      final storedImage = row.imageUrl?.trim() ?? '';
+      if (storedText.isEmpty && storedImage.isEmpty) return null;
+
+      return ArticleReadabilityResult(
+        mainText: storedText.isNotEmpty ? storedText : null,
+        imageUrl: storedImage.isNotEmpty ? storedImage : null,
+        pageTitle: row.title,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Ensure we have cached article text (from background readability backfill)
+  /// for TTS/translate, no matter which mode (reader vs full web) we are in.
   Future<void> _ensureLinesLoaded() async {
     if (_lines.isNotEmpty) return;
 
-    final readability = context.read<Readability4JExtended>();
-    ArticleReadabilityResult? result;
-    try {
-      result = await readability.extractMainContent(widget.url);
-    } catch (_) {
-      result = null;
-    }
-    final rssOnly = (result?.source ?? '').toUpperCase() == 'RSS';
-
-    final shouldTryDom = (result == null) ||
-        _looksLikePreview(result) ||
-        (result?.isPaywalled ?? false) ||
-        _isVeryShort(result?.mainText);
-
-    if ((shouldTryDom || rssOnly) && !_triedDomExtraction) {
-      _triedDomExtraction = true;
-      final domResult = await _extractFromWebViewDom();
-      if (domResult != null &&
-          (domResult.mainText?.trim().isNotEmpty ?? false) &&
-          _isBetterContent(domResult, result)) {
-        result = domResult;
-      }
-    }
+    final result = await _loadCachedContent();
     if (!mounted) return;
 
-    final hasNoText = result == null || (result.mainText?.trim().isEmpty ?? true);
+    final text = (result?.mainText ?? '').trim();
     final pagePaywalled = result?.isPaywalled ?? false;
-    _paywallLikely = pagePaywalled && hasNoText;
-
-    if (hasNoText) {
+    if (text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            _paywallLikely
-                ? 'This article looks paywalled. Sign in on the site (via Add feed → "Requires login") then reload.'
-                : 'Unable to extract article text for reading.',
+            'Reader text is still loading. Please wait while it finishes in the background.',
           ),
           duration: const Duration(seconds: 5),
         ),
       );
-      setState(() {});
+      setState(() {
+        _paywallLikely = false;
+        _lines.clear();
+        _currentLine = 0;
+      });
       return;
     }
 
-    final text = (result.mainText ?? '').trim();
     final previewOnly = _isLikelyPreviewText(text, pagePaywalled);
     final rawLines = text.isEmpty
         ? <String>[]
@@ -835,7 +848,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
     combined.addAll(rawLines);
 
-    _heroImageUrl ??= result.imageUrl;
+    _heroImageUrl ??= result?.imageUrl;
 
      // Treat the page as paywalled only when the extracted text still looks
     // like a short preview. Some sites keep paywall markers in the DOM even
@@ -849,105 +862,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         ..addAll(combined);
       _currentLine = 0;
     });
-
-    unawaited(_persistReadabilityResult(result));
-  }
-
-  bool _isVeryShort(String? text) {
-    final trimmed = (text ?? '').trim();
-    if (trimmed.isEmpty) return true;
-    final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-    return words < 220;
-  }
-
-  bool _isBetterContent(
-    ArticleReadabilityResult candidate,
-    ArticleReadabilityResult? existing,
-  ) {
-    final candidateText = (candidate.mainText ?? '').trim();
-    if (candidateText.isEmpty) return false;
-
-    final existingText = (existing?.mainText ?? '').trim();
-    if (existing == null || existingText.isEmpty) return true;
-
-    final candidateWords =
-        candidateText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-    final existingWords =
-        existingText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-
-    final candidatePreview =
-        _isLikelyPreviewText(candidateText, candidate.isPaywalled ?? false);
-    final existingPreview =
-        _isLikelyPreviewText(existingText, existing.isPaywalled ?? false);
-
-    if (!candidatePreview && existingPreview) return true;
-    if (candidatePreview && !existingPreview) return false;
-
-    // Prefer noticeably longer extractions to increase chances of full text
-    return candidateWords > existingWords + 60;
-  }
-  bool _looksLikePreview(ArticleReadabilityResult result) {
-    final text = (result.mainText ?? '').trim();
-    if (text.isEmpty) return true;
-    return _isLikelyPreviewText(text, result.isPaywalled ?? false);
-  }
-
-  Future<void> _persistReadabilityResult(
-      ArticleReadabilityResult? result) async {
-    final articleId = widget.articleId;
-    if (articleId == null || articleId.isEmpty) return;
-    if (result == null) return;
-
-    try {
-      final contentService = context.read<ArticleContentService>();
-      await contentService.saveExtractedContent(
-        articleId: articleId,
-        mainText: result.mainText,
-        imageUrl: result.imageUrl,
-      );
-    } catch (_) {
-      // ignore persistence failures in the foreground reader
-    }
-  }
-
-  Future<ArticleReadabilityResult?> _extractFromWebViewDom() async {
-    try {
-      await _waitForPageToSettle();
-
-      // Remove paywall overlays and unhide subscriber content before extraction
-      await _removePaywallOverlays();
-
-      // Small delay to let DOM settle after JavaScript manipulations
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      final raw = await _controller.runJavaScriptReturningResult(
-        '(() => document.documentElement.outerHTML)();',
-      );
-
-      if (!mounted) return null;
-
-      final html = _normalizeJsString(raw);
-      if (html == null || html.isEmpty) return null;
-
-      final readability = context.read<Readability4JExtended>();
-      return await readability.extractFromHtml(
-        widget.url,
-        html,
-        strategyName: 'WebView DOM (cleaned)',
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _waitForPageToSettle() async {
-    // Wait briefly for the current page load + JS-rendered content to settle.
-    for (var i = 0; i < 5; i++) {
-      if (!_isLoading) break;
-      await Future.delayed(const Duration(milliseconds: 200));
-    }
-
-    await Future.delayed(const Duration(milliseconds: 200));
   }
 
   /// Remove paywall overlays and unhide subscriber content in the live WebView

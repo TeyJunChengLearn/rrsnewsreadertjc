@@ -642,6 +642,8 @@ class _ArticleRow extends StatelessWidget {
               articleId: item.id,
               url: url,
               title: item.title,
+              initialMainText: item.mainText,
+              initialImageUrl: item.imageUrl,
             ),
           ),
         );
