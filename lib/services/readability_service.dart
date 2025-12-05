@@ -661,7 +661,10 @@ class Readability4JExtended {
       if (hasCookies && _webViewExtractor != null) {
         // Authenticated: WebView FIRST to get subscriber content
         strategies.addAll([
-          _extractWithAndroidWebView(url),
+          _extractWithAndroidWebView(
+            url,
+            forceAuthenticatedDelay: hasCookies,
+          ),
           _extractFromKnownSubscriberFeeds(url),
           _extractWithDefaultStrategy(url),
           if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
@@ -671,7 +674,11 @@ class Readability4JExtended {
       } else {
         // Not authenticated: standard extraction order
         strategies.addAll([
-          if (_webViewExtractor != null) _extractWithAndroidWebView(url),
+          if (_webViewExtractor != null)
+            _extractWithAndroidWebView(
+              url,
+              forceAuthenticatedDelay: hasCookies,
+            ),
           _extractWithDefaultStrategy(url),
           _extractFromKnownSubscriberFeeds(url),
           if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
@@ -835,13 +842,17 @@ class Readability4JExtended {
   /// Android-only strategy: render the page in an off-screen WebView so any
   /// authenticated session cookies and JavaScript-rendered content are
   /// captured before running Readability.
-  Future<ArticleReadabilityResult?> _extractWithAndroidWebView(String url) async {
+  Future<ArticleReadabilityResult?> _extractWithAndroidWebView(
+    String url, {
+    bool forceAuthenticatedDelay = false,
+  }) async {
     try {
       final headers =
           await _buildRequestHeaders(url, mobile: _config.useMobileUserAgent);
 
       // Check if we have authentication cookies - give more time for authenticated pages
-      final hasCookies = headers['Cookie']?.isNotEmpty ?? false;
+      final hasCookies =
+          forceAuthenticatedDelay || (headers['Cookie']?.trim().isNotEmpty ?? false);
       final loadDelay = hasCookies
           ? _config.pageLoadDelay + const Duration(seconds: 3)
           : _config.pageLoadDelay;
