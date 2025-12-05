@@ -65,12 +65,16 @@ class FeedRepository {
     for (final item in fetched) {
       final old = existingById[item.id];
       if (old != null) {
+        final incomingText = item.mainText?.trim() ?? '';
+        final existingText = old.mainText?.trim() ?? '';
+
+        final prefersIncoming = incomingText.isNotEmpty &&
+            (existingText.isEmpty || incomingText.length >= existingText.length);
+
         mergedMap[item.id] = item.copyWith(
           isRead: old.isRead,
           isBookmarked: old.isBookmarked,
-          mainText: (item.mainText?.isNotEmpty ?? false)
-              ? item.mainText
-              : old.mainText,
+          mainText: prefersIncoming ? item.mainText : old.mainText,
         );
       } else {
         mergedMap[item.id] = item;
