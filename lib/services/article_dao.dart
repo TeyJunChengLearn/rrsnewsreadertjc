@@ -77,6 +77,19 @@ class ArticleDao {
     );
   }
 
+  Future<FeedItem?> findById(String id) async {
+    final db = await _dbService.database;
+    final rows = await db.query(
+      'articles',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+    return FeedItem.fromMap(rows.first);
+  }
+
   Future<void> updateContent(
       String id, String? mainText, String? imageUrl) async {
     final db = await _dbService.database;

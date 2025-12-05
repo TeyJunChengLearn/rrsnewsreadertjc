@@ -639,6 +639,7 @@ class _ArticleRow extends StatelessWidget {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ArticleWebviewPage(
+              articleId: item.id,
               url: url,
               title: item.title,
             ),

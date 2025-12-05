@@ -11,6 +11,7 @@ import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../providers/settings_provider.dart';
+import '../services/article_content_service.dart';
 import '../services/readability_service.dart';
 
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
@@ -205,11 +206,13 @@ String _normalizeForTts(String text, String langCode) {
 class ArticleWebviewPage extends StatefulWidget {
   final String url;
   final String? title; // optional RSS/article title to include in reading
+  final String? articleId;
 
   const ArticleWebviewPage({
     super.key,
     required this.url,
     this.title,
+    this.articleId,
   });
 
   @override
@@ -776,11 +779,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
     final rssOnly = (result?.source ?? '').toUpperCase() == 'RSS';
 
-    if ((result == null || _looksLikePreview(result) || rssOnly) &&
-        !_triedDomExtraction) {
+    final shouldTryDom = (result == null) ||
+        _looksLikePreview(result) ||
+        (result?.isPaywalled ?? false) ||
+        _isVeryShort(result?.mainText);
+
+    if ((shouldTryDom || rssOnly) && !_triedDomExtraction) {
       _triedDomExtraction = true;
       final domResult = await _extractFromWebViewDom();
-      if (domResult != null && (domResult.mainText?.trim().isNotEmpty ?? false)) {
+      if (domResult != null &&
+          (domResult.mainText?.trim().isNotEmpty ?? false) &&
+          _isBetterContent(domResult, result)) {
         result = domResult;
       }
     }
@@ -840,11 +849,65 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
         ..addAll(combined);
       _currentLine = 0;
     });
+
+    unawaited(_persistReadabilityResult(result));
+  }
+
+  bool _isVeryShort(String? text) {
+    final trimmed = (text ?? '').trim();
+    if (trimmed.isEmpty) return true;
+    final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    return words < 220;
+  }
+
+  bool _isBetterContent(
+    ArticleReadabilityResult candidate,
+    ArticleReadabilityResult? existing,
+  ) {
+    final candidateText = (candidate.mainText ?? '').trim();
+    if (candidateText.isEmpty) return false;
+
+    final existingText = (existing?.mainText ?? '').trim();
+    if (existing == null || existingText.isEmpty) return true;
+
+    final candidateWords =
+        candidateText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final existingWords =
+        existingText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+
+    final candidatePreview =
+        _isLikelyPreviewText(candidateText, candidate.isPaywalled ?? false);
+    final existingPreview =
+        _isLikelyPreviewText(existingText, existing.isPaywalled ?? false);
+
+    if (!candidatePreview && existingPreview) return true;
+    if (candidatePreview && !existingPreview) return false;
+
+    // Prefer noticeably longer extractions to increase chances of full text
+    return candidateWords > existingWords + 60;
   }
   bool _looksLikePreview(ArticleReadabilityResult result) {
     final text = (result.mainText ?? '').trim();
     if (text.isEmpty) return true;
     return _isLikelyPreviewText(text, result.isPaywalled ?? false);
+  }
+
+  Future<void> _persistReadabilityResult(
+      ArticleReadabilityResult? result) async {
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return;
+    if (result == null) return;
+
+    try {
+      final contentService = context.read<ArticleContentService>();
+      await contentService.saveExtractedContent(
+        articleId: articleId,
+        mainText: result.mainText,
+        imageUrl: result.imageUrl,
+      );
+    } catch (_) {
+      // ignore persistence failures in the foreground reader
+    }
   }
 
   Future<ArticleReadabilityResult?> _extractFromWebViewDom() async {
