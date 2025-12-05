@@ -190,6 +190,7 @@ class ReadabilityConfig {
   final String userAgent;
   final Map<String, String> siteSpecificAuthHeaders;
   final Map<String, String> knownSubscriberFeeds;
+  final Map<String, bool> cookieAuthOverrides;
 
   ReadabilityConfig({
     Map<String, String>? cookies,
@@ -204,6 +205,7 @@ class ReadabilityConfig {
     String? userAgent,
     Map<String, String>? siteSpecificAuthHeaders,
     Map<String, String>? knownSubscriberFeeds,
+    Map<String, bool>? cookieAuthOverrides,
   })  : cookies = cookies,
         customHeaders = customHeaders,
         paywallKeywords = paywallKeywords ??
@@ -245,7 +247,8 @@ class ReadabilityConfig {
               'theguardian.com': 'https://www.theguardian.com/world/rss',
               'reuters.com': 'https://www.reutersagency.com/feed/',
               'apnews.com': 'https://apnews.com/feed',
-            };
+            },
+        cookieAuthOverrides = cookieAuthOverrides ?? {};
 }
 
 /// Enhanced RSS feed parser with subscription detection
@@ -740,13 +743,33 @@ class Readability4JExtended {
       ];
 
       final hasAuth = authPatterns.any((pattern) => lowerCookies.contains(pattern));
+      final cookiePreview = cookies.substring(0, cookies.length > 100 ? 100 : cookies.length);
       if (hasAuth) {
-        print('🔐 Auth cookies detected for $url');
-        print('   Cookie preview: ${cookies.substring(0, cookies.length > 100 ? 100 : cookies.length)}${cookies.length > 100 ? '...' : ''}');
+        print('🔐 Auth-like cookies detected for $url');
+        print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
       } else {
-        print('🔐 Cookies found but no auth patterns detected for $url');
+        print('🔐 Cookies present without auth patterns for $url');
+        print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
       }
-      return hasAuth;
+      final host = Uri.tryParse(url)?.host;
+
+      bool? override;
+      if (host != null && _config.cookieAuthOverrides.isNotEmpty) {
+        for (final entry in _config.cookieAuthOverrides.entries) {
+          if (host == entry.key || host.endsWith(entry.key)) {
+            override = entry.value;
+            break;
+          }
+        }
+      }
+
+      if (override != null) {
+        print('🔐 Cookie auth override for $host: ${override ? 'enabled' : 'disabled'}');
+        return override;
+      }
+
+      print('🔐 Cookies found for $url, treating as authenticated by default');
+      return true;
     } catch (e) {
       print('🔐 Error checking cookies: $e');
       return false;
