@@ -37,6 +37,10 @@ Subscriber pages follow the exact same pipeline—no hidden bypasses:
   paywall, the extractor only sees that HTML. If you are logged in, the
   rendered subscriber version is what gets captured and fed into
   Readability4JExtended for main text extraction.
+- On Android, an off-screen WebView now renders each article (with JavaScript,
+  DOM storage, and your session cookies enabled) and returns the full HTML to
+  Readability4JExtended. That same cookie jar is reused for network fetches, so
+  authenticated paid articles are captured with their complete main text.
 - All requests for protected pages automatically include the WebView’s cookies
   so the extractor can fetch the paid content you already have access to. The
   captured text and HTML are persisted through the repository for offline

@@ -5,6 +5,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
+import 'android_webview_extractor.dart';
 
 /// Result of readability extraction: main article text + optional hero image.
 class ArticleReadabilityResult {
@@ -507,19 +508,22 @@ class Readability4JExtended {
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
   final Future<String?> Function(String url)? cookieHeaderBuilder;
+  final AndroidWebViewExtractor? _webViewExtractor;
   final Map<String, bool> _feedSubscriptionStatus = {};
 
   Readability4JExtended({
     http.Client? client,
     ReadabilityConfig? config,
     this.cookieHeaderBuilder,
+    AndroidWebViewExtractor? webViewExtractor,
   })  : _client = client ?? http.Client(),
         _config = config ?? ReadabilityConfig(),
         _rssParser = RssFeedParser(
           client: client,
           siteSpecificAuthHeaders: config?.siteSpecificAuthHeaders,
           cookieHeaderBuilder: cookieHeaderBuilder,
-        );
+        ),
+        _webViewExtractor = webViewExtractor;
 
   /// Main extraction method with subscription awareness
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
@@ -527,6 +531,7 @@ class Readability4JExtended {
       await _respectRateLimit(url);
 
       final strategies = [
+        if (_webViewExtractor != null) _extractWithAndroidWebView(url),
         _extractWithDefaultStrategy(url),
         _extractFromKnownSubscriberFeeds(url),
         if (_config.useMobileUserAgent) _extractWithMobileStrategy(url),
@@ -558,6 +563,34 @@ class Readability4JExtended {
       final headers = await _buildRequestHeaders(url);
       return await _extractContent(url, headers, 'Desktop');
     } catch (e) {
+      return null;
+    }
+  }
+
+/// Android-only strategy: render the page in an off-screen WebView so any
+  /// authenticated session cookies and JavaScript-rendered content are
+  /// captured before running Readability.
+  Future<ArticleReadabilityResult?> _extractWithAndroidWebView(String url) async {
+    try {
+      final headers =
+          await _buildRequestHeaders(url, mobile: _config.useMobileUserAgent);
+
+      final html = await _webViewExtractor?.renderPage(
+        url,
+        timeout: _config.pageLoadDelay + const Duration(seconds: 15),
+        postLoadDelay: _config.pageLoadDelay,
+        userAgent: headers['User-Agent'],
+        cookieHeader: headers['Cookie'],
+      );
+
+      if (html == null || html.isEmpty) return null;
+
+      return await extractFromHtml(
+        url,
+        html,
+        strategyName: 'Android WebView',
+      );
+    } catch (_) {
       return null;
     }
   }

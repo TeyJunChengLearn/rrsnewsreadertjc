@@ -1,4 +1,6 @@
 // lib/main.dart
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,6 +13,7 @@ import 'services/feed_source_dao.dart';
 import 'services/readability_service.dart';
 import 'services/article_content_service.dart';
 import 'services/cookie_bridge.dart';
+import 'services/android_webview_extractor.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -60,6 +63,9 @@ class AppBootstrap extends StatelessWidget {
         Provider<Readability4JExtended>(
           create: (ctx) {
             final cookieBridge = ctx.read<CookieBridge>();
+            final webRenderer = Platform.isAndroid
+                ? AndroidWebViewExtractor()
+                : null;
             return Readability4JExtended(
               config: ReadabilityConfig(
                 pageLoadDelay: const Duration(seconds: 10),
@@ -67,6 +73,7 @@ class AppBootstrap extends StatelessWidget {
                 attemptAuthenticatedRss: true,
               ),
               cookieHeaderBuilder: cookieBridge.buildHeader,
+              webViewExtractor: webRenderer,
             );
           },
         ),
