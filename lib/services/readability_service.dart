@@ -692,7 +692,10 @@ class Readability4JExtended {
 
     try {
       final cookies = await cookieHeaderBuilder!(url);
-      if (cookies == null || cookies.isEmpty) return false;
+      if (cookies == null || cookies.isEmpty) {
+        print('🔐 No cookies found for $url');
+        return false;
+      }
 
       // Check for common auth cookie patterns
       final lowerCookies = cookies.toLowerCase();
@@ -707,8 +710,16 @@ class Readability4JExtended {
         'premium',
       ];
 
-      return authPatterns.any((pattern) => lowerCookies.contains(pattern));
+      final hasAuth = authPatterns.any((pattern) => lowerCookies.contains(pattern));
+      if (hasAuth) {
+        print('🔐 Auth cookies detected for $url');
+        print('   Cookie preview: ${cookies.substring(0, cookies.length > 100 ? 100 : cookies.length)}${cookies.length > 100 ? '...' : ''}');
+      } else {
+        print('🔐 Cookies found but no auth patterns detected for $url');
+      }
+      return hasAuth;
     } catch (e) {
+      print('🔐 Error checking cookies: $e');
       return false;
     }
   }
