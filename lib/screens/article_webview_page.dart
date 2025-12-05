@@ -229,6 +229,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
 
+  bool _disposed = false;
+
   bool _isLoading = true;
   bool _readerOn = false;
   bool _paywallLikely = false;
@@ -370,14 +372,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (_) {
+            if (!mounted || _disposed) return;
             setState(() => _isLoading = true);
           },
           onPageFinished: (url) async {
+            if (!mounted || _disposed) return;
             setState(() => _isLoading = false);
 
             // Automatically remove paywall overlays when page finishes loading
             // This helps user see full content even when not in reader mode
             await Future.delayed(const Duration(milliseconds: 1000));
+            if (!mounted || _disposed) return;
             await _removePaywallOverlays();
           },
         ),
@@ -844,7 +849,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     final combined = <String>[];
     final header = ((widget.title ?? '').trim().isNotEmpty
             ? (widget.title ?? '').trim()
-            : (result.pageTitle ?? '').trim())
+            : (result?.pageTitle ?? '').trim())
         .trim();
     if (header.isNotEmpty) {
       combined.add(header);
@@ -1116,6 +1121,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   @override
   void dispose() {
+    _disposed = true;
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
