@@ -31,6 +31,49 @@ class ArticleReadabilityResult {
       (mainText != null && mainText!.isNotEmpty) ||
       (imageUrl != null && imageUrl!.isNotEmpty);
 
+  /// Check if content is full/complete, not just a preview/teaser
+  bool get hasFullContent {
+    if (!hasContent) return false;
+
+    // If not paywalled and has content, it's probably full
+    if (isPaywalled != true) return true;
+
+    // For paywalled content, check if it's substantial (not a teaser)
+    final text = mainText?.trim() ?? '';
+    if (text.isEmpty) return false;
+
+    // Check length - teasers are usually < 600 characters
+    if (text.length < 600) return false;
+
+    // Check for teaser indicators
+    final lowerText = text.toLowerCase();
+    final teaserPhrases = [
+      'continue reading',
+      'subscribe to read',
+      'to continue reading',
+      'login to read',
+      'sign in to read',
+      'premium content',
+      'subscriber exclusive',
+      'read the full article',
+      'unlock full article',
+    ];
+
+    for (final phrase in teaserPhrases) {
+      if (lowerText.contains(phrase)) {
+        return false;  // Contains teaser phrase = not full content
+      }
+    }
+
+    // Check if ends with ellipsis
+    if (text.endsWith('...') || text.endsWith('…')) {
+      return false;
+    }
+
+    // If paywalled but substantial and no teaser indicators, consider it full
+    return true;
+  }
+
   @override
   String toString() {
     return 'ArticleReadabilityResult{'
@@ -539,18 +582,40 @@ class Readability4JExtended {
         if (_config.attemptAuthenticatedRss) _extractFromAuthenticatedRssStrategy(url),
       ];
 
+      ArticleReadabilityResult? bestPartialResult;
+
       for (final strategy in strategies) {
         try {
           final result = await strategy;
           if (result != null && result.hasContent) {
-            return result;
+            final textLen = result.mainText?.length ?? 0;
+            final isPaywalled = result.isPaywalled ?? false;
+            final source = result.source ?? 'Unknown';
+
+            print('Strategy "$source" extracted $textLen chars (paywalled: $isPaywalled, full: ${result.hasFullContent})');
+
+            // If we found full content, return immediately
+            if (result.hasFullContent) {
+              print('✓ Returning full content from "$source"');
+              return result;
+            }
+            // Keep the best partial result (longest text) as fallback
+            if (bestPartialResult == null ||
+                (result.mainText?.length ?? 0) > (bestPartialResult.mainText?.length ?? 0)) {
+              bestPartialResult = result;
+              print('  Keeping as best partial result');
+            }
           }
         } catch (e) {
           continue;
         }
       }
 
-      return null;
+      // Return best partial result if we didn't find full content
+      if (bestPartialResult != null) {
+        print('⚠ No full content found, returning best partial (${bestPartialResult.mainText?.length ?? 0} chars from ${bestPartialResult.source})');
+      }
+      return bestPartialResult;
     } catch (e) {
       print('Error extracting content from $url: $e');
       return null;
