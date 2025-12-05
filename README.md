@@ -15,27 +15,32 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 
-## How article extraction works
+## How the app reaches and processes articles
 
-- **Reader/TTS extraction pipeline**: when feeds are refreshed, the provider
-  schedules a background backfill that looks for entries with missing or teaser
-  text. Each candidate is fetched through `Readability4JExtended`, which
-  returns main text and hero images that are written back to SQLite so later
-  TTS/reader sessions do not have to re-fetch the page.【F:lib/providers/rss_provider.dart†L117-L157】【F:lib/services/article_content_service.dart†L8-L53】
-- **In-article fallback**: if the stored text is still short, the article page
-  reuses the active WebView (JavaScript + DOM storage enabled) to capture the
-  rendered HTML via `document.documentElement.outerHTML`, then re-runs
-  Readability to pull a full article for TTS. This means whatever the WebView
-  shows—public page, teaser, or subscriber view—is what the extractor narrates
-  and caches locally.【F:lib/screens/article_webview_page.dart†L340-L421】【F:lib/screens/article_webview_page.dart†L771-L906】
+The extractor mirrors the flow shown in the screenshot:
+
+1. A background task spins up an off-screen **WebView** with JavaScript and DOM
+   storage enabled, then loads each article URL gathered from refreshed feeds.
+2. After the page finishes loading, the WebView dumps the full rendered HTML.
+   That HTML is piped through **Readability4JExtended** to strip layout noise,
+   media, ads, and non-article segments so only the clean main text remains.
+3. The cleaned HTML plus extracted text are written to SQLite by the
+   `EntryRepository`, making later offline reading or TTS playback instant and
+   avoiding repeated fetches.【F:lib/providers/rss_provider.dart†L117-L157】【F:lib/services/article_content_service.dart†L8-L53】【F:lib/screens/article_webview_page.dart†L340-L421】
 
 ## What happens with subscription/paid content
 
-- The in-app WebView always loads the public article URL. Extraction happens on
-  that rendered page, so if you are signed out the app reads the teaser, and if
-  you are signed in (via the built-in login flow) it reads the unlocked
-  content. No special bypasses are used—the WebView session and cookie bridge
-  simply mirror what you can already access in a normal browser.【F:lib/screens/article_webview_page.dart†L340-L381】【F:lib/services/readability_service.dart†L474-L535】
+Subscriber pages follow the exact same pipeline—no hidden bypasses:
+
+- The WebView loads the public article URL and carries the same cookies and
+  local storage you have in a normal browser session. If the site shows you a
+  paywall, the extractor only sees that HTML. If you are logged in, the
+  rendered subscriber version is what gets captured and fed into
+  Readability4JExtended for main text extraction.
+- All requests for protected pages automatically include the WebView’s cookies
+  so the extractor can fetch the paid content you already have access to. The
+  captured text and HTML are persisted through the repository for offline
+  reading or TTS just like free articles.【F:lib/screens/article_webview_page.dart†L340-L381】【F:lib/screens/article_webview_page.dart†L771-L906】【F:lib/services/readability_service.dart†L474-L535】
 # rrsnewsreadertjc
 
 ## Accessing paywalled articles
@@ -45,6 +50,11 @@ valid session cookies for the site you already have access to. Configure a
 `cookieHeaderBuilder` (or static `cookies` map) when constructing
 `Readability4JExtended` so each request includes the correct authentication
 cookie for that domain.
+
+**Is full paid-article capture possible? Yes—provided you sign in and let the
+WebView hand those cookies to Readability4JExtended.** The extractor does not
+evade paywalls; it simply reuses your authenticated session so the main text of
+subscriber pages can be parsed and stored just like free articles.
 
 ### Quick steps (works for any paywalled news site)
 1. Add the feed as usual.
