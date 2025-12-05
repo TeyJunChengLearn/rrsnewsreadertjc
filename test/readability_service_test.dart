@@ -503,6 +503,56 @@ test('prefers the WebView strategy and forwards cookies + user agent',
       expect(result.source, 'JSON-LD');
     });
 
+    test('extracts longest content from JSON-LD graph/array bodies', () async {
+      const html = '''
+        <html>
+          <head>
+            <script type="application/ld+json">
+              {
+                "@graph": [
+                  {
+                    "@type": "BreadcrumbList",
+                    "itemListElement": []
+                  },
+                  {
+                    "@type": ["NewsArticle", "Article"],
+                    "headline": "JSON-LD Graph Test",
+                    "articleBody": [
+                      "Paragraph one from array body.",
+                      "Paragraph two with more details from array body.",
+                      "Paragraph three that should be included in the joined body to make sure the content is long enough to be treated as the best JSON-LD candidate."
+                    ]
+                  },
+                  {
+                    "@type": "NewsArticle",
+                    "mainEntity": {
+                      "articleBody": "Shorter mainEntity body that should not override the longer array content."
+                    }
+                  }
+                ]
+              }
+            </script>
+          </head>
+          <body>
+            <p>Regular content that should be ignored because JSON-LD is richer.</p>
+          </body>
+        </html>
+      ''';
+
+      final client = MockClient((request) async => http.Response(html, 200));
+      final readability = Readability4JExtended(client: client);
+
+      final result = await readability
+          .extractMainContent('https://example.com/jsonld-graph');
+
+      expect(result, isNotNull);
+      expect(result!.source, 'JSON-LD');
+      expect(result.mainText, contains('Paragraph one from array body.'));
+      expect(result.mainText, contains('Paragraph three that should be included'));
+      expect(result.mainText,
+          isNot(contains('Shorter mainEntity body that should not override')));
+    });
+
     test('handles network errors gracefully', () async {
       final client = MockClient(
           (request) async => throw http.ClientException('Network error'));

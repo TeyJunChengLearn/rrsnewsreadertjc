@@ -889,8 +889,9 @@ class Readability4JExtended {
       final isTruncatedResult = bestResult == null ||
           (bestResult.mainText?.length ?? 0) < 1200 ||
           !bestResult.hasFullContent;
+      final allowRetry = _config.webViewMaxSnapshots > 1;
 
-      if (isTruncatedResult) {
+      if (isTruncatedResult && allowRetry) {
         final retryHtml = await _captureStabilizedHtml(
           url: url,
           headers: headers,
@@ -1442,7 +1443,7 @@ class Readability4JExtended {
   }) async {
     final headers = <String, String>{
       'User-Agent': mobile
-          ? 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36'
+          ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
           : _config.userAgent,
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1740,44 +1741,115 @@ class Readability4JExtended {
       final scripts =
           doc.querySelectorAll('script[type="application/ld+json"]');
 
+      String? bestBody;
+
       for (final script in scripts) {
         final content = script.text?.trim();
         if (content == null || content.isEmpty) continue;
 
         try {
           final json = jsonDecode(content);
-          if (json is Map<String, dynamic>) {
-            if (json['@type'] == 'NewsArticle' ||
-                json['@type'] == 'Article' ||
-                json['@type'] == 'BlogPosting') {
-              final articleBody =
-                  json['articleBody'] ?? json['description'] ?? json['text'];
-              if (articleBody != null &&
-                  articleBody is String &&
-                  articleBody.trim().isNotEmpty) {
-                return articleBody.trim();
-              }
-            }
+          final bodies = _collectJsonLdBodies(json);
 
-            if (json['mainEntity'] is Map) {
-              final mainEntity = json['mainEntity'] as Map<String, dynamic>;
-              if (mainEntity['articleBody'] != null) {
-                final body = mainEntity['articleBody'] as String;
-                if (body.trim().isNotEmpty) {
-                  return body.trim();
-                }
-              }
+          for (final body in bodies) {
+            if (body.trim().isEmpty) continue;
+            if (bestBody == null || body.length > bestBody.length) {
+              bestBody = body.trim();
             }
           }
-        } catch (e) {
+        } catch (_) {
           continue;
         }
       }
-    } catch (e) {
+
+      return bestBody;
+    } catch (_) {
       return null;
     }
+  }
 
-    return null;
+  /// Collect possible article bodies from common JSON-LD shapes (object, list,
+  /// @graph, nested mainEntity, etc.). Returns all candidates so the caller can
+  /// pick the longest.
+  List<String> _collectJsonLdBodies(dynamic json) {
+    final bodies = <String>[];
+
+    void handleNode(dynamic node) {
+      if (node is Map<String, dynamic>) {
+        final type = node['@type'];
+        final types = <String>[];
+
+        if (type is String) {
+          types.add(type.toLowerCase());
+        } else if (type is List) {
+          types.addAll(
+              type.whereType<String>().map((t) => t.toLowerCase()).toList());
+        }
+
+        bool isArticleType() {
+          return types.any((t) =>
+              t.contains('newsarticle') ||
+              t.contains('article') ||
+              t.contains('blogposting'));
+        }
+
+        String? normalizeBody(dynamic body) {
+          if (body == null) return null;
+          if (body is String) return body.trim();
+          if (body is List) {
+            final parts = body
+                .where((element) => element is String && element.trim().isNotEmpty)
+                .cast<String>()
+                .toList();
+            if (parts.isNotEmpty) return parts.join('\n').trim();
+          }
+          if (body is Map<String, dynamic>) {
+            final value = body['@value'] ?? body['text'] ?? body['content'];
+            if (value is String && value.trim().isNotEmpty) {
+              return value.trim();
+            }
+          }
+          return null;
+        }
+
+        final mainEntity = node['mainEntity'];
+        final candidates = [
+          normalizeBody(node['articleBody']),
+          normalizeBody(node['text']),
+          normalizeBody(node['description']),
+          if (mainEntity is Map<String, dynamic>)
+            normalizeBody(
+                mainEntity['articleBody'] ?? mainEntity['text'] ?? mainEntity),
+        ].whereType<String>();
+
+        for (final body in candidates) {
+          // Prefer article-typed nodes, but allow long text from others if no
+          // explicit type is present.
+          if (isArticleType() || body.length > 180) {
+            bodies.add(body);
+          }
+        }
+
+        // Dive into nested structures: mainEntity, graph lists, or array
+        // properties that may hold additional article bodies.
+        if (mainEntity != null) {
+          handleNode(mainEntity);
+        }
+
+        if (node['@graph'] is List) {
+          for (final item in node['@graph']) {
+            handleNode(item);
+          }
+        }
+      } else if (node is List) {
+        for (final item in node) {
+          handleNode(item);
+        }
+      }
+    }
+
+    handleNode(json);
+    return bodies;
   }
 
   /// Check if content appears truncated
