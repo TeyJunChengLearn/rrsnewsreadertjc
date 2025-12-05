@@ -849,7 +849,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     final combined = <String>[];
     final header = ((widget.title ?? '').trim().isNotEmpty
             ? (widget.title ?? '').trim()
-            : (result.pageTitle ?? '').trim())
+            : (result?.pageTitle ?? '').trim())
         .trim();
     if (header.isNotEmpty) {
       combined.add(header);
