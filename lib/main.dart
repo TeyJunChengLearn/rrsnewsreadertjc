@@ -1,6 +1,4 @@
 // lib/main.dart
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,8 +10,6 @@ import 'services/article_dao.dart';
 import 'services/feed_source_dao.dart';
 import 'services/readability_service.dart';
 import 'services/article_content_service.dart';
-import 'services/cookie_bridge.dart';
-import 'services/android_webview_extractor.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -36,7 +32,6 @@ class AppBootstrap extends StatelessWidget {
       providers: [
         // SETTINGS
         ChangeNotifierProvider(
-          // ⬇⬇⬇ use loadFromStorage, not load
           create: (_) => SettingsProvider()..loadFromStorage(),
         ),
 
@@ -50,53 +45,22 @@ class AppBootstrap extends StatelessWidget {
           update: (_, db, __) => ArticleDao(db),
         ),
 
-        // FEED SOURCE DAO (BBC, Yahoo, etc. stored in SQLite)
+        // FEED SOURCE DAO
         ProxyProvider<DatabaseService, FeedSourceDao>(
           update: (_, db, __) => FeedSourceDao(db),
         ),
-        Provider<CookieBridge>(
-          create: (_) => CookieBridge(),
-        ),
 
-        // In main.dart, update the Readability4JExtended provider
-// Update the Readability4JExtended provider in main.dart
+        // READABILITY SERVICE (Simplified)
         Provider<Readability4JExtended>(
-          create: (ctx) {
-            final cookieBridge = ctx.read<CookieBridge>();
-            final webRenderer = Platform.isAndroid
-                ? AndroidWebViewExtractor()
-                : null;
-            return Readability4JExtended(
-              config: ReadabilityConfig(
-                pageLoadDelay: const Duration(seconds: 12),
-                useMobileUserAgent: true,
-                attemptAuthenticatedRss: true,
-                webViewMaxSnapshotDuration: const Duration(seconds: 15),
-                webViewRenderTimeoutBuffer: const Duration(seconds: 25),
-                webViewMaxSnapshots: 4,
-                knownSubscriberFeeds: {
-                  // Malaysiakini - major news site with paywall
-                  'malaysiakini.com': 'https://www.malaysiakini.com/rss',
-                  'mkini.bz': 'https://www.malaysiakini.com/rss',
-                  // Other common subscription sites
-                  'nytimes.com': 'https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml',
-                  'wsj.com': 'https://feeds.a.dj.com/rss/RSSWSJD.xml',
-                  'ft.com': 'https://www.ft.com/?format=rss',
-                  'economist.com': 'https://www.economist.com/rss',
-                  'bloomberg.com': 'https://www.bloomberg.com/feed/podcast/etf-report.xml',
-                  'washingtonpost.com': 'https://feeds.washingtonpost.com/rss/rss_compost',
-                },
-                siteSpecificAuthCookiePatterns: {
-                  'malaysiakini.com': ['mkini', 'session', 'auth', 'subscriber', 'logged'],
-                  'mkini.bz': ['mkini', 'session', 'auth', 'subscriber', 'logged'],
-                },
-              ),
-              cookieHeaderBuilder: cookieBridge.buildHeader,
-              webViewExtractor: webRenderer,
-            );
-          },
+          create: (_) => Readability4JExtended(
+            config: ReadabilityConfig(
+              requestDelay: const Duration(milliseconds: 500),
+              attemptRssFallback: true,
+            ),
+          ),
         ),
 
+        // ARTICLE CONTENT SERVICE
         ProxyProvider2<Readability4JExtended, ArticleDao,
             ArticleContentService>(
           update: (_, readability, articleDao, __) => ArticleContentService(
@@ -105,20 +69,15 @@ class AppBootstrap extends StatelessWidget {
           ),
         ),
 
-        // LOW LEVEL RSS
+        // RSS SERVICE
         Provider<RssService>(
-          create: (ctx) {
-            final cookieBridge = ctx.read<CookieBridge>();
-            return RssService(
-              fetcher: HttpFeedFetcher(
-                cookieHeaderBuilder: cookieBridge.buildHeader,
-              ),
-              parser: RssAtomParser(),
-            );
-          },
+          create: (_) => RssService(
+            fetcher: HttpFeedFetcher(),
+            parser: RssAtomParser(),
+          ),
         ),
 
-        // REPOSITORY = RSS + DB
+        // FEED REPOSITORY
         ProxyProvider4<RssService, ArticleDao, FeedSourceDao,
             ArticleContentService, FeedRepository>(
           update:
