@@ -374,7 +374,7 @@ class RssFeedParser {
         }
       }
     } catch (e) {
-      print('RSS parsing error: $e');
+      // RSS parsing failed, return null
     }
     return null;
   }
@@ -644,10 +644,7 @@ class Readability4JExtended {
   /// Main extraction method with subscription awareness
   Future<ArticleReadabilityResult?> extractMainContent(String url) async {
     final inFlight = _inflightExtractions[url];
-    if (inFlight != null) {
-      print('🔄 Reusing in-flight readability extraction for $url');
-      return inFlight;
-    }
+    if (inFlight != null) return inFlight;
 
     final future = _extractMainContentInternal(url);
     _inflightExtractions[url] = future;
@@ -706,37 +703,24 @@ class Readability4JExtended {
           final result = await strategy;
           if (result != null && result.hasContent) {
             final textLen = result.mainText?.length ?? 0;
-            final isPaywalled = result.isPaywalled ?? false;
-            final source = result.source ?? 'Unknown';
-
-            print('Strategy "$source" extracted $textLen chars (paywalled: $isPaywalled, full: ${result.hasFullContent})');
 
             // Priority 1: If we found full content (not a teaser), return immediately
-            if (result.hasFullContent) {
-              print('✓ Returning full content from "$source"');
-              return result;
-            }
+            if (result.hasFullContent) return result;
 
             // Priority 2: For authenticated users, keep tracking longest content
             if (hasCookies) {
               if (textLen > bestLength) {
                 bestLength = textLen;
                 bestResult = result;
-                print('  Keeping as best result (authenticated user)');
 
                 // If we got substantial content (>500 chars for authenticated users), accept it
-                // Lowered from 800 to 500 since we have cookies and paywall removal
-                if (textLen > 500) {
-                  print('✓ Substantial content found (authenticated), returning from "$source"');
-                  return result;
-                }
+                if (textLen > 500) return result;
               }
             } else {
               // Priority 3: Not authenticated, keep best partial result
               if (textLen > bestLength) {
                 bestLength = textLen;
                 bestResult = result;
-                print('  Keeping as best partial result');
               }
             }
           }
@@ -745,11 +729,6 @@ class Readability4JExtended {
         }
       }
 
-      // Return best result we found
-      if (bestResult != null) {
-        final resultLen = bestResult.mainText?.length ?? 0;
-        print('⚠ No full content found, returning best partial ($resultLen chars from ${bestResult.source})');
-      }
       return bestResult;
     } catch (e) {
       print('Error extracting content from $url: $e');
@@ -759,40 +738,25 @@ class Readability4JExtended {
 
   /// Check if we have authentication cookies for this URL
   Future<bool> _hasAuthCookies(String url) async {
-    String? cookies;
-
     try {
-      if (cookieHeaderBuilder != null) {
-        cookies = await cookieHeaderBuilder!(url);
-      }
+      String? cookies = cookieHeaderBuilder != null
+          ? await cookieHeaderBuilder!(url)
+          : null;
 
       cookies ??= _config.customHeaders?['Cookie'];
 
       if ((cookies == null || cookies.isEmpty) &&
           _config.cookies != null &&
           _config.cookies!.isNotEmpty) {
-        cookies =
-            _config.cookies!.entries.map((e) => '${e.key}=${e.value}').join('; ');
+        cookies = _config.cookies!.entries.map((e) => '${e.key}=${e.value}').join('; ');
       }
 
-      if (cookies == null || cookies.trim().isEmpty) {
-        print('🔐 No cookies found for $url');
-        return false;
-      }
+      if (cookies == null || cookies.trim().isEmpty) return false;
 
-      final normalizedCookies = cookies.trim();
-
-      // Check for common auth cookie patterns
-      final lowerCookies = normalizedCookies.toLowerCase();
+      final lowerCookies = cookies.toLowerCase();
       final authPatterns = <String>[
-        'session',
-        'auth',
-        'token',
-        'logged',
-        'user',
-        'member',
-        'subscriber',
-        'premium',
+        'session', 'auth', 'token', 'logged',
+        'user', 'member', 'subscriber', 'premium',
       ];
 
       final host = Uri.tryParse(url)?.host;
@@ -800,42 +764,21 @@ class Readability4JExtended {
       if (host != null && _config.siteSpecificAuthCookiePatterns.isNotEmpty) {
         for (final entry in _config.siteSpecificAuthCookiePatterns.entries) {
           if (host == entry.key || host.endsWith(entry.key)) {
-            authPatterns
-                .addAll(entry.value.map((pattern) => pattern.toLowerCase()));
+            authPatterns.addAll(entry.value.map((pattern) => pattern.toLowerCase()));
           }
         }
       }
 
-      final hasAuth = authPatterns.any((pattern) => lowerCookies.contains(pattern));
-      final cookiePreview = normalizedCookies
-          .substring(0, normalizedCookies.length > 100 ? 100 : normalizedCookies.length);
-      if (hasAuth) {
-        print('🔐 Auth-like cookies detected for $url');
-        print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
-      } else {
-        print('🔐 Cookies present without auth patterns for $url');
-        print('   Cookie preview: $cookiePreview${cookies.length > 100 ? '...' : ''}');
-      }
-
-      bool? override;
       if (host != null && _config.cookieAuthOverrides.isNotEmpty) {
         for (final entry in _config.cookieAuthOverrides.entries) {
           if (host == entry.key || host.endsWith(entry.key)) {
-            override = entry.value;
-            break;
+            return entry.value;
           }
         }
       }
 
-      if (override != null) {
-        print('🔐 Cookie auth override for $host: ${override ? 'enabled' : 'disabled'}');
-        return override;
-      }
-
-      print('🔐 Cookies found for $url, treating as authenticated by default');
       return true;
     } catch (e) {
-      print('🔐 Error checking cookies: $e');
       return false;
     }
   }
@@ -1040,9 +983,9 @@ class Readability4JExtended {
         }
       }
     } catch (e) {
-      print('Authenticated RSS strategy failed: $e');
+      // Authenticated RSS strategy failed
     }
-    
+
     return null;
   }
 
@@ -1276,16 +1219,13 @@ class Readability4JExtended {
 
   /// Enhanced metadata extraction
   _Metadata _extractMetadata(dom.Document doc, Uri pageUri) {
-    final isSubscriberContent = _detectSubscriberMetadata(doc);
-    final feedType = _extractFeedType(doc);
-    
     return _Metadata(
       title: _extractTitle(doc),
       author: _extractAuthor(doc),
       publishedDate: _extractPublishedDate(doc),
       imageUrl: _extractMetaImage(doc, pageUri),
-      isSubscriberContent: isSubscriberContent,
-      feedType: feedType,
+      isSubscriberContent: _detectSubscriberMetadata(doc),
+      feedType: _extractFeedType(doc),
     );
   }
 
@@ -1493,72 +1433,44 @@ class Readability4JExtended {
 
   /// Extract page title
   String? _extractTitle(dom.Document doc) {
-    final ogTitle =
-        doc.querySelector('meta[property="og:title"]')?.attributes['content'];
-    if (ogTitle != null && ogTitle.trim().isNotEmpty) return ogTitle.trim();
+    final ogTitle = doc.querySelector('meta[property="og:title"]')?.attributes['content'];
+    if (ogTitle != null && ogTitle.isNotEmpty) return ogTitle;
 
-    final twitterTitle =
-        doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
-    if (twitterTitle != null && twitterTitle.trim().isNotEmpty)
-      return twitterTitle.trim();
+    final twitterTitle = doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
+    if (twitterTitle != null && twitterTitle.isNotEmpty) return twitterTitle;
 
-    final schemaTitle =
-        doc.querySelector('meta[itemprop="name"]')?.attributes['content'];
-    if (schemaTitle != null && schemaTitle.trim().isNotEmpty)
-      return schemaTitle.trim();
+    final schemaTitle = doc.querySelector('meta[itemprop="name"]')?.attributes['content'];
+    if (schemaTitle != null && schemaTitle.isNotEmpty) return schemaTitle;
 
-    final plainTitle = doc.querySelector('title')?.text;
-    if (plainTitle != null && plainTitle.trim().isNotEmpty) {
-      return plainTitle.trim();
-    }
+    final plainTitle = doc.querySelector('title')?.text?.trim();
+    if (plainTitle != null && plainTitle.isNotEmpty) return plainTitle;
 
-    final h1 = doc.querySelector('h1')?.text;
-    if (h1 != null && h1.trim().isNotEmpty) {
-      return h1.trim();
-    }
+    final h1 = doc.querySelector('h1')?.text?.trim();
+    if (h1 != null && h1.isNotEmpty) return h1;
 
     return null;
   }
 
   /// Extract author information
   String? _extractAuthor(dom.Document doc) {
-    final ogAuthor = doc
-            .querySelector('meta[property="og:author"]')
-            ?.attributes['content'] ??
-        doc
-            .querySelector('meta[property="article:author"]')
-            ?.attributes['content'];
-    if (ogAuthor != null && ogAuthor.trim().isNotEmpty) return ogAuthor.trim();
+    final ogAuthor = doc.querySelector('meta[property="og:author"]')?.attributes['content'] ??
+        doc.querySelector('meta[property="article:author"]')?.attributes['content'];
+    if (ogAuthor != null && ogAuthor.isNotEmpty) return ogAuthor;
 
-    final schemaAuthor =
-        doc.querySelector('meta[itemprop="author"]')?.attributes['content'];
-    if (schemaAuthor != null && schemaAuthor.trim().isNotEmpty)
-      return schemaAuthor.trim();
+    final schemaAuthor = doc.querySelector('meta[itemprop="author"]')?.attributes['content'];
+    if (schemaAuthor != null && schemaAuthor.isNotEmpty) return schemaAuthor;
 
-    final twitterAuthor = doc
-        .querySelector('meta[name="twitter:creator"]')
-        ?.attributes['content'];
-    if (twitterAuthor != null && twitterAuthor.trim().isNotEmpty)
-      return twitterAuthor.trim();
+    final twitterAuthor = doc.querySelector('meta[name="twitter:creator"]')?.attributes['content'];
+    if (twitterAuthor != null && twitterAuthor.isNotEmpty) return twitterAuthor;
 
     final authorSelectors = [
-      '.author',
-      '.byline',
-      '[rel="author"]',
-      '.post-author',
-      '.article-author',
-      '.story-author',
-      'a[href*="/author/"]',
+      '.author', '.byline', '[rel="author"]', '.post-author',
+      '.article-author', '.story-author', 'a[href*="/author/"]',
     ];
 
     for (final selector in authorSelectors) {
-      final authorElement = doc.querySelector(selector);
-      if (authorElement != null) {
-        final authorText = authorElement.text?.trim();
-        if (authorText != null && authorText.isNotEmpty) {
-          return authorText;
-        }
-      }
+      final authorText = doc.querySelector(selector)?.text?.trim();
+      if (authorText != null && authorText.isNotEmpty) return authorText;
     }
 
     return null;
@@ -1567,39 +1479,30 @@ class Readability4JExtended {
   /// Extract published date
   DateTime? _extractPublishedDate(dom.Document doc) {
     try {
-      final ogDate = doc
-              .querySelector('meta[property="article:published_time"]')
-              ?.attributes['content'] ??
-          doc
-              .querySelector('meta[property="og:published_time"]')
-              ?.attributes['content'];
-      if (ogDate != null && ogDate.trim().isNotEmpty) {
-        return DateTime.tryParse(ogDate.trim());
+      final ogDate = doc.querySelector('meta[property="article:published_time"]')?.attributes['content'] ??
+          doc.querySelector('meta[property="og:published_time"]')?.attributes['content'];
+      if (ogDate != null && ogDate.isNotEmpty) {
+        final parsed = DateTime.tryParse(ogDate);
+        if (parsed != null) return parsed;
       }
 
-      final schemaDate = doc
-          .querySelector('meta[itemprop="datePublished"]')
-          ?.attributes['content'];
-      if (schemaDate != null && schemaDate.trim().isNotEmpty) {
-        return DateTime.tryParse(schemaDate.trim());
+      final schemaDate = doc.querySelector('meta[itemprop="datePublished"]')?.attributes['content'];
+      if (schemaDate != null && schemaDate.isNotEmpty) {
+        final parsed = DateTime.tryParse(schemaDate);
+        if (parsed != null) return parsed;
       }
 
       final dateSelectors = [
-        'time[datetime]',
-        '.date',
-        '.published',
-        '.post-date',
-        '.article-date',
-        '.story-date',
-        '.timestamp',
+        'time[datetime]', '.date', '.published', '.post-date',
+        '.article-date', '.story-date', '.timestamp',
       ];
 
       for (final selector in dateSelectors) {
         final dateElement = doc.querySelector(selector);
         if (dateElement != null) {
           final dateTime = dateElement.attributes['datetime'];
-          if (dateTime != null && dateTime.trim().isNotEmpty) {
-            final parsed = DateTime.tryParse(dateTime.trim());
+          if (dateTime != null && dateTime.isNotEmpty) {
+            final parsed = DateTime.tryParse(dateTime);
             if (parsed != null) return parsed;
           }
 
@@ -1624,9 +1527,7 @@ class Readability4JExtended {
           }
         }
       }
-    } catch (_) {
-      return null;
-    }
+    } catch (_) {}
 
     return null;
   }
@@ -1878,25 +1779,15 @@ class Readability4JExtended {
   /// Extract hidden content from data attributes and CSS-hidden elements
   String? _extractHiddenContent(dom.Element root) {
     // Try data attributes first
-    final dataElements =
-        root.querySelectorAll('[data-content], [data-article], [data-text]');
-
-    for (final el in dataElements) {
+    for (final el in root.querySelectorAll('[data-content], [data-article], [data-text]')) {
       final content = el.attributes['data-content'] ??
           el.attributes['data-article'] ??
           el.attributes['data-text'];
-      if (content != null && content.length > 100) {
-        return content;
-      }
+      if (content != null && content.length > 100) return content;
     }
 
     // Try CSS-hidden elements that might contain full subscriber content
-    final hiddenContent = _extractFromHiddenElements(root);
-    if (hiddenContent != null && hiddenContent.length > 100) {
-      return hiddenContent;
-    }
-
-    return null;
+    return _extractFromHiddenElements(root);
   }
 
   /// Extract content from CSS-hidden elements (display:none, visibility:hidden, etc.)
@@ -2368,14 +2259,12 @@ class Readability4JExtended {
 
   /// Extract meta image for metadata
   String? _extractMetaImage(dom.Document doc, Uri pageUri) {
-    final ogImage =
-        doc.querySelector('meta[property="og:image"]')?.attributes['content'];
+    final ogImage = doc.querySelector('meta[property="og:image"]')?.attributes['content'];
     if (ogImage != null && ogImage.trim().isNotEmpty) {
       return _resolveImageUrl(ogImage.trim(), pageUri);
     }
 
-    final twitterImage =
-        doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
+    final twitterImage = doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
     if (twitterImage != null && twitterImage.trim().isNotEmpty) {
       return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
