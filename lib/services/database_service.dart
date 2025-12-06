@@ -13,7 +13,7 @@ class DatabaseService {
   factory DatabaseService() => _instance;
 
   static const _dbName = 'news_reader.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
 
   Database? _db;
 
@@ -41,7 +41,9 @@ class DatabaseService {
       CREATE TABLE feed_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
-        url TEXT NOT NULL UNIQUE
+        url TEXT NOT NULL UNIQUE,
+        delayTime INTEGER NOT NULL DEFAULT 2000,
+        requiresLogin INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -64,6 +66,11 @@ class DatabaseService {
    Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE articles ADD COLUMN mainText TEXT');
+    }
+    if (oldVersion < 3) {
+      // Add WebView extraction support fields
+      await db.execute('ALTER TABLE feed_sources ADD COLUMN delayTime INTEGER NOT NULL DEFAULT 2000');
+      await db.execute('ALTER TABLE feed_sources ADD COLUMN requiresLogin INTEGER NOT NULL DEFAULT 0');
     }
   }
 }

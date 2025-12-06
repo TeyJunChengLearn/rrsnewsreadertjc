@@ -88,7 +88,7 @@ class CookieBridge {
   Future<bool> hasSubscriptionCookies(String url) async {
     try {
       final cookies = await getAllCookiesForDomain(url);
-      
+
       const subscriptionCookieNames = [
         'subscription',
         'premium',
@@ -98,8 +98,9 @@ class CookieBridge {
         'session',
         'auth',
         'token',
+        'mkini',  // Malaysiakini-specific
       ];
-      
+
       return cookies.keys.any((key) {
         final lowerKey = key.toLowerCase();
         return subscriptionCookieNames.any((name) => lowerKey.contains(name));
@@ -110,24 +111,29 @@ class CookieBridge {
   }
 
   /// NEW: Manually inject cookies for known paywall sites
+  /// NOTE: These are placeholder patterns for testing only.
+  /// For Malaysiakini and other subscription sites, users should log in
+  /// through the proper login flow to get legitimate session cookies.
   Future<bool> injectPaywallCookies(String url) async {
     final uri = Uri.parse(url);
     final host = uri.host;
-    
+
     // Known cookie patterns for bypassing paywalls
+    // WARNING: These are test patterns and may not work for actual paywall bypass
     final cookiePatterns = {
       'medium.com': '_uid=1; lightstep_guid/medium=1;',
       'nytimes.com': 'nyt-a=1; nyt-gdpr=0;',
       'bloomberg.com': 'session=test;',
       'wsj.com': 'wsjregion=na;',
+      'malaysiakini.com': 'mkini_session=test; subscriber=1;',  // Placeholder - users should login properly
     };
-    
+
     for (final domain in cookiePatterns.keys) {
       if (host.contains(domain)) {
         return await setCookie(url, cookiePatterns[domain]!);
       }
     }
-    
+
     return false;
   }
 }

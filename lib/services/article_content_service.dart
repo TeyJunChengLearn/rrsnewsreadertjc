@@ -10,9 +10,12 @@ class ArticleContentService {
 
   /// Fetches main article text/images for any FeedItem missing them.
   /// Returns a map of article id -> extracted content for rows that were updated.
+  ///
+  /// Automatically detects paywalled sites and uses WebView extraction with delays.
   Future<Map<String, ArticleReadabilityResult>> backfillMissingContent(
-    List<FeedItem> items,
-  ) async {
+    List<FeedItem> items, {
+    int defaultDelayMs = 2000,
+  }) async {
     final updated = <String, ArticleReadabilityResult>{};
 
     for (final item in items) {
@@ -23,7 +26,15 @@ class ArticleContentService {
 
       if (!needsBetterText && !needsImage) continue;
 
-      final content = await readability.extractMainContent(item.link);
+      // Auto-detect if this URL requires WebView extraction (paywalled sites)
+      final shouldUseWebView = _isPaywalledDomain(item.link);
+      final delayMs = shouldUseWebView ? defaultDelayMs : 0;
+
+      final content = await readability.extractMainContent(
+        item.link,
+        useWebView: shouldUseWebView,
+        delayMs: delayMs,
+      );
       if (content == null) continue;
 
       final updates = <String, String?>{};
@@ -115,4 +126,37 @@ bool _looksLikeTeaser(String? text) {
   }
 
   return false;
+}
+
+/// Detects if a URL is from a known paywalled domain that requires WebView extraction
+/// Returns true for sites like Malaysiakini, NYT, WSJ, etc.
+bool _isPaywalledDomain(String url) {
+  try {
+    final uri = Uri.parse(url);
+    final host = uri.host.toLowerCase();
+
+    // List of known paywalled domains
+    const paywalledDomains = [
+      'malaysiakini.com',
+      'nytimes.com',
+      'wsj.com',
+      'bloomberg.com',
+      'ft.com',
+      'economist.com',
+      'washingtonpost.com',
+      'medium.com',
+      'wired.com',
+      'theatlantic.com',
+    ];
+
+    for (final domain in paywalledDomains) {
+      if (host.contains(domain)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch (_) {
+    return false;
+  }
 }

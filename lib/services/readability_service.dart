@@ -52,14 +52,23 @@ class ReadabilityConfig {
   final String userAgent;
   final bool attemptRssFallback;
 
+  /// Desktop user agent (Chrome on Windows)
+  static const String desktopUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+  /// Mobile user agent (Chrome on Android)
+  /// Many paywalled sites serve full content to mobile users
+  static const String mobileUserAgent =
+      'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
   ReadabilityConfig({
     Duration? requestDelay,
     String? userAgent,
     bool? attemptRssFallback,
   })  : requestDelay = requestDelay ?? const Duration(milliseconds: 500),
-        userAgent = userAgent ??
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        userAgent = userAgent ?? desktopUserAgent,
         attemptRssFallback = attemptRssFallback ?? true;
 }
 
@@ -268,6 +277,8 @@ class Readability4JExtended {
   final ReadabilityConfig _config;
   final RssFeedParser _rssParser;
   final Map<String, DateTime> _lastRequestTime = {};
+  final Future<String?> Function(String url)? _cookieHeaderBuilder;
+  final AndroidWebViewExtractor? _webViewExtractor;
 
   Readability4JExtended({
     http.Client? client,
@@ -276,20 +287,40 @@ class Readability4JExtended {
     Future<String?> Function(String url)? cookieHeaderBuilder,
   })  : _client = client ?? http.Client(),
         _config = config ?? ReadabilityConfig(),
-        _rssParser = RssFeedParser(client: client);
+        _rssParser = RssFeedParser(client: client),
+        _cookieHeaderBuilder = cookieHeaderBuilder,
+        _webViewExtractor = webViewExtractor;
 
   /// Main extraction method
-  Future<ArticleReadabilityResult?> extractMainContent(String url) async {
+  ///
+  /// Follows WebView-first strategy (like Java project):
+  /// 1. If [useWebView] is true and WebView extractor is available, render page with [delayMs]
+  /// 2. Extract content from rendered HTML using Readability algorithm
+  /// 3. Fallback to HTTP-based extraction if WebView fails or unavailable
+  /// 4. Try RSS feed as final fallback
+  Future<ArticleReadabilityResult?> extractMainContent(
+    String url, {
+    bool useWebView = false,
+    int delayMs = 2000,
+  }) async {
     try {
       await _respectRateLimit(url);
 
-      // Try HTML extraction first
+      // STRATEGY 1: WebView-first (for paywalled/login-required sites)
+      if (useWebView && _webViewExtractor != null) {
+        final webViewResult = await _extractFromWebView(url, delayMs);
+        if (webViewResult != null && webViewResult.hasFullContent) {
+          return webViewResult;
+        }
+      }
+
+      // STRATEGY 2: HTTP-based HTML extraction
       final htmlResult = await _extractFromHtml(url);
       if (htmlResult != null && htmlResult.hasFullContent) {
         return htmlResult;
       }
 
-      // Fallback to RSS if configured
+      // STRATEGY 3: RSS fallback
       if (_config.attemptRssFallback) {
         final rssResult = await _extractFromRss(url);
         if (rssResult != null && rssResult.hasContent) {
@@ -309,10 +340,44 @@ class Readability4JExtended {
     }
   }
 
+  /// Extract content using WebView rendering (like Java project's TtsExtractor)
+  /// 1. Loads URL in headless WebView with JavaScript enabled
+  /// 2. Waits [delayMs] for dynamic content to load
+  /// 3. Executes JavaScript to get full HTML: document.documentElement.outerHTML
+  /// 4. Extracts main content using Readability algorithm
+  Future<ArticleReadabilityResult?> _extractFromWebView(
+    String url,
+    int delayMs,
+  ) async {
+    try {
+      // Get cookies for authentication
+      String? cookieHeader;
+      if (_cookieHeaderBuilder != null) {
+        cookieHeader = await _cookieHeaderBuilder!(url);
+      }
+
+      // Render page in WebView with delay
+      final html = await _webViewExtractor!.renderPage(
+        url,
+        postLoadDelay: Duration(milliseconds: delayMs),
+        userAgent: _config.userAgent,
+        cookieHeader: cookieHeader,
+      );
+
+      if (html == null || html.isEmpty) return null;
+
+      // Extract content from rendered HTML
+      return await extractFromHtml(url, html, strategyName: 'WebView');
+    } catch (e) {
+      print('WebView extraction failed for $url: $e');
+      return null;
+    }
+  }
+
   /// Extract from HTML
   Future<ArticleReadabilityResult?> _extractFromHtml(String url) async {
     try {
-      final headers = _buildRequestHeaders(url);
+      final headers = await _buildRequestHeaders(url);
       final response = await _client.get(Uri.parse(url), headers: headers);
 
       if (response.statusCode != 200) return null;
@@ -370,7 +435,7 @@ class Readability4JExtended {
 
     for (final rssUrl in rssUrls) {
       try {
-        final headers = _buildRequestHeaders(rssUrl);
+        final headers = await _buildRequestHeaders(rssUrl);
         final rssContent = await _rssParser.extractFromRss(
           rssUrl,
           url,
@@ -427,8 +492,8 @@ class Readability4JExtended {
   }
 
   /// Build request headers
-  Map<String, String> _buildRequestHeaders(String url) {
-    return {
+  Future<Map<String, String>> _buildRequestHeaders(String url) async {
+    final headers = {
       'User-Agent': _config.userAgent,
       'Accept':
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -436,6 +501,16 @@ class Readability4JExtended {
       'Accept-Encoding': 'gzip, deflate',
       'Connection': 'keep-alive',
     };
+
+    // Add cookies if builder is available
+    if (_cookieHeaderBuilder != null) {
+      final cookieHeader = await _cookieHeaderBuilder!(url);
+      if (cookieHeader != null && cookieHeader.isNotEmpty) {
+        headers['Cookie'] = cookieHeader;
+      }
+    }
+
+    return headers;
   }
 
   /// Respect rate limiting
@@ -847,10 +922,14 @@ Readability4JExtended createReadabilityExtractor({
   final config = ReadabilityConfig(
     requestDelay: requestDelay,
     attemptRssFallback: attemptRssFallback,
+    userAgent: useMobileUserAgent
+        ? ReadabilityConfig.mobileUserAgent
+        : ReadabilityConfig.desktopUserAgent,
   );
 
   return Readability4JExtended(
     client: client,
     config: config,
+    cookieHeaderBuilder: cookieHeaderBuilder,
   );
 }

@@ -71,6 +71,9 @@ class AppBootstrap extends StatelessWidget {
               config: ReadabilityConfig(
                 requestDelay: const Duration(milliseconds: 500),
                 attemptRssFallback: true,
+                // Use mobile user agent for better paywall bypass
+                // Many sites (like Malaysiakini) serve full content to mobile
+                userAgent: ReadabilityConfig.mobileUserAgent,
               ),
               cookieHeaderBuilder: cookieBridge.buildHeader,
               webViewExtractor: webRenderer,
