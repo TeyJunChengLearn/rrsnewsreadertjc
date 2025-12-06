@@ -5,6 +5,8 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
+import 'android_webview_extractor.dart';
+
 /// Result of article extraction
 class ArticleReadabilityResult {
   final String? mainText;
@@ -819,19 +821,6 @@ class Readability4JExtended {
     } catch (_) {
       return null;
     }
-  }
-}
-
-/// Stub for compatibility (not used in simplified version)
-class AndroidWebViewExtractor {
-  Future<String?> renderPage(
-    String url, {
-    Duration timeout = const Duration(seconds: 15),
-    Duration postLoadDelay = Duration.zero,
-    String? userAgent,
-    String? cookieHeader,
-  }) async {
-    return null;
   }
 }
 

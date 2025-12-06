@@ -1,4 +1,6 @@
 // lib/main.dart
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -10,6 +12,8 @@ import 'services/article_dao.dart';
 import 'services/feed_source_dao.dart';
 import 'services/readability_service.dart';
 import 'services/article_content_service.dart';
+import 'services/cookie_bridge.dart';
+import 'services/android_webview_extractor.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -50,14 +54,28 @@ class AppBootstrap extends StatelessWidget {
           update: (_, db, __) => FeedSourceDao(db),
         ),
 
-        // READABILITY SERVICE (Simplified)
+        // COOKIE BRIDGE (for WebView cookies and authentication)
+        Provider<CookieBridge>(
+          create: (_) => CookieBridge(),
+        ),
+
+        // READABILITY SERVICE (Simplified but fully functional)
         Provider<Readability4JExtended>(
-          create: (_) => Readability4JExtended(
-            config: ReadabilityConfig(
-              requestDelay: const Duration(milliseconds: 500),
-              attemptRssFallback: true,
-            ),
-          ),
+          create: (ctx) {
+            final cookieBridge = ctx.read<CookieBridge>();
+            final webRenderer = Platform.isAndroid
+                ? AndroidWebViewExtractor()
+                : null;
+            
+            return Readability4JExtended(
+              config: ReadabilityConfig(
+                requestDelay: const Duration(milliseconds: 500),
+                attemptRssFallback: true,
+              ),
+              cookieHeaderBuilder: cookieBridge.buildHeader,
+              webViewExtractor: webRenderer,
+            );
+          },
         ),
 
         // ARTICLE CONTENT SERVICE
@@ -71,10 +89,15 @@ class AppBootstrap extends StatelessWidget {
 
         // RSS SERVICE
         Provider<RssService>(
-          create: (_) => RssService(
-            fetcher: HttpFeedFetcher(),
-            parser: RssAtomParser(),
-          ),
+          create: (ctx) {
+            final cookieBridge = ctx.read<CookieBridge>();
+            return RssService(
+              fetcher: HttpFeedFetcher(
+                cookieHeaderBuilder: cookieBridge.buildHeader,
+              ),
+              parser: RssAtomParser(),
+            );
+          },
         ),
 
         // FEED REPOSITORY
