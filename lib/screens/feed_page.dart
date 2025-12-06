@@ -218,6 +218,11 @@ class _FeedPageState extends State<FeedPage>
                       return;
                     }
 
+                    // Capture context references before async gaps
+                    final scaffoldMessenger = ScaffoldMessenger.of(context);
+                    final navigator = Navigator.of(context);
+                    final rssProvider = context.read<RssProvider>();
+
                     // Try to auto-detect feed title from RSS/Atom
                     String titleText = url;
                     final detected = await _autoDetectFeedTitle(url);
@@ -241,7 +246,7 @@ class _FeedPageState extends State<FeedPage>
                       if (!mounted) return;
 
                       // Show loading indicator
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      scaffoldMessenger.showSnackBar(
                         const SnackBar(
                           content: Text('Opening login page...'),
                           duration: Duration(seconds: 1),
@@ -249,28 +254,30 @@ class _FeedPageState extends State<FeedPage>
                       );
 
                       // Open login WebView with the article URL
-                      await Navigator.of(context).push(
+                      await navigator.push(
                         MaterialPageRoute(
                           builder: (_) => SiteLoginPage(
-                            initialUrl: loginUrl,
+                            initialUrl: loginUrl!,
                             siteName: titleText,
                           ),
                         ),
                       );
                     }
-                    await context.read<RssProvider>().addSource(
+
+                    if (!mounted) return;
+                    await rssProvider.addSource(
                           FeedSource(title: titleText, url: url),
                         );
 
                     _urlController.clear();
 
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    scaffoldMessenger.showSnackBar(
                       SnackBar(
                         content: Text('Added "$titleText"'),
                       ),
                     );
-                    
+
 
                   },
                   child: const Text('Add feed'),
@@ -311,8 +318,9 @@ class _FeedPageState extends State<FeedPage>
                                 icon: const Icon(Icons.refresh),
                                 tooltip: 'Refresh all feeds',
                                 onPressed: () async {
-                                  await context.read<RssProvider>().refresh();
-                                  if (!mounted) return;
+                                  final provider = context.read<RssProvider>();
+                                  await provider.refresh();
+                                  if (!context.mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text('Refreshed ${src.title}'),

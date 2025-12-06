@@ -138,31 +138,6 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
           WebViewWidget(controller: _controller),
           if (_loading)
             const Center(child: CircularProgressIndicator()),
-          // Instructions banner
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Material(
-              color: Colors.blue.shade700,
-              elevation: 4,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: const [
-                    Icon(Icons.info_outline, color: Colors.white, size: 20),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Log in to unlock subscriber content. Tap ✓ when done.',
-                        style: TextStyle(color: Colors.white, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
