@@ -83,6 +83,48 @@ class _FeedPageState extends State<FeedPage>
     return null;
   }
 
+  /// Get the first article URL from the RSS feed.
+  /// This is used for the login flow - users can log in while viewing an actual article.
+  Future<String?> _getFirstArticleUrl(String feedUrl) async {
+    try {
+      final resp = await http.get(Uri.parse(feedUrl));
+      if (resp.statusCode != 200) return null;
+
+      final body = resp.body;
+
+      // Try RSS first
+      try {
+        final rss = RssFeed.parse(body);
+        if (rss.items != null && rss.items!.isNotEmpty) {
+          final firstItem = rss.items!.first;
+          final link = firstItem.link?.trim();
+          if (link != null && link.isNotEmpty) {
+            return link;
+          }
+        }
+      } catch (_) {
+        // not RSS, fall through
+      }
+
+      // Then try Atom
+      try {
+        final atom = AtomFeed.parse(body);
+        if (atom.items != null && atom.items!.isNotEmpty) {
+          final firstItem = atom.items!.first;
+          final link = firstItem.links?.firstOrNull?.href?.trim();
+          if (link != null && link.isNotEmpty) {
+            return link;
+          }
+        }
+      } catch (_) {
+        // not Atom or parse failed
+      }
+    } catch (_) {
+      // network or parse error – just ignore
+    }
+    return null;
+  }
+
   /// Show a dialog asking whether this feed needs login.
   /// Returns true if user tapped Yes.
   Future<bool> _askRequiresLogin() async {
@@ -186,9 +228,27 @@ class _FeedPageState extends State<FeedPage>
                     // Ask the user whether this feed needs login
                     final requiresLogin = await _askRequiresLogin();
 
-                    // Save source as usual
+                    // If login is required, fetch first article URL and open login page
                     if (requiresLogin) {
-                      final loginUrl = _guessLoginUrl(url);
+                      // Try to get the first article URL from the feed
+                      String? loginUrl = await _getFirstArticleUrl(url);
+
+                      // Fallback to base URL if we can't get an article
+                      if (loginUrl == null || loginUrl.isEmpty) {
+                        loginUrl = _guessLoginUrl(url);
+                      }
+
+                      if (!mounted) return;
+
+                      // Show loading indicator
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Opening login page...'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+
+                      // Open login WebView with the article URL
                       await Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => SiteLoginPage(
