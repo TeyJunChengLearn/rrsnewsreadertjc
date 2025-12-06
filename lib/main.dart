@@ -68,9 +68,28 @@ class AppBootstrap extends StatelessWidget {
                 : null;
             return Readability4JExtended(
               config: ReadabilityConfig(
-                pageLoadDelay: const Duration(seconds: 10),
+                pageLoadDelay: const Duration(seconds: 12),
                 useMobileUserAgent: true,
                 attemptAuthenticatedRss: true,
+                webViewMaxSnapshotDuration: const Duration(seconds: 15),
+                webViewRenderTimeoutBuffer: const Duration(seconds: 25),
+                webViewMaxSnapshots: 4,
+                knownSubscriberFeeds: {
+                  // Malaysiakini - major news site with paywall
+                  'malaysiakini.com': 'https://www.malaysiakini.com/rss',
+                  'mkini.bz': 'https://www.malaysiakini.com/rss',
+                  // Other common subscription sites
+                  'nytimes.com': 'https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml',
+                  'wsj.com': 'https://feeds.a.dj.com/rss/RSSWSJD.xml',
+                  'ft.com': 'https://www.ft.com/?format=rss',
+                  'economist.com': 'https://www.economist.com/rss',
+                  'bloomberg.com': 'https://www.bloomberg.com/feed/podcast/etf-report.xml',
+                  'washingtonpost.com': 'https://feeds.washingtonpost.com/rss/rss_compost',
+                },
+                siteSpecificAuthCookiePatterns: {
+                  'malaysiakini.com': ['mkini', 'session', 'auth', 'subscriber', 'logged'],
+                  'mkini.bz': ['mkini', 'session', 'auth', 'subscriber', 'logged'],
+                },
               ),
               cookieHeaderBuilder: cookieBridge.buildHeader,
               webViewExtractor: webRenderer,

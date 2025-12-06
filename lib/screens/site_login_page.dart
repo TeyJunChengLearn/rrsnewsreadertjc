@@ -50,20 +50,48 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
       return;
     }
 
+    // Submit (flush) cookies from WebView
     final cookies = await bridge.submitCookies(currentUrl);
 
     if (!mounted) return;
     if (cookies == null || cookies.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No cookies detected yet')),
+        const SnackBar(
+          content: Text('⚠️ No cookies detected yet. Make sure you\'ve logged in first.'),
+          duration: Duration(seconds: 3),
+        ),
       );
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Login cookies saved for this site')),
-    );
+    // Check if we have subscription/authentication cookies
+    final hasAuthCookies = await bridge.hasSubscriptionCookies(currentUrl);
 
+    if (!mounted) return;
+
+    // Count cookies for user feedback
+    final cookieCount = cookies.split(';').length;
+
+    if (hasAuthCookies) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✓ Login successful! Saved $cookieCount authentication cookies'),
+          backgroundColor: Colors.green.shade700,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('ℹ️ Saved $cookieCount cookies (no login cookies detected)'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+
+    // Close the login page after a short delay
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
     Navigator.of(context).maybePop();
   }
 
@@ -94,8 +122,8 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
         title: Text('Sign in to ${widget.siteName}'),
         actions: [
           IconButton(
-            tooltip: 'Use these cookies',
-            icon: const Icon(Icons.cookie_outlined),
+            tooltip: 'Save cookies & finish',
+            icon: const Icon(Icons.check_circle_outline),
             onPressed: _submitCookies,
           ),
           IconButton(
@@ -110,6 +138,31 @@ class _SiteLoginPageState extends State<SiteLoginPage> {
           WebViewWidget(controller: _controller),
           if (_loading)
             const Center(child: CircularProgressIndicator()),
+          // Instructions banner
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Material(
+              color: Colors.blue.shade700,
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: const [
+                    Icon(Icons.info_outline, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Log in to unlock subscriber content. Tap ✓ when done.',
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
