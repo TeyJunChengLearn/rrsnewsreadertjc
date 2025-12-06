@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/settings_provider.dart';
+import 'cookie_diagnostic_page.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -351,6 +352,24 @@ class SettingsPage extends StatelessWidget {
               'Text-to-speech will switch voice when available.',
               style: TextStyle(color: Colors.black54),
             ),
+          ),
+
+          const SizedBox(height: 24),
+          const Divider(height: 32),
+          // ================== DIAGNOSTICS =================
+          _sectionHeader(context, 'Diagnostics'),
+
+          ListTile(
+            leading: const Icon(Icons.bug_report),
+            title: const Text('Cookie diagnostics'),
+            subtitle: const Text('Check if you\'re logged in for subscriber content'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const CookieDiagnosticPage(),
+                ),
+              );
+            },
           ),
         ],
       ),
