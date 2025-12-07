@@ -27,6 +27,9 @@ dependencies:
   flutter_local_notifications: ^17.1.2
   share_plus: ^10.0.2
   xml: ^6.5.0
+  audio_service: ^0.18.15
+  wakelock_plus: ^1.2.8
+  rxdart: ^0.28.0
 
 dev_dependencies:
   flutter_test:

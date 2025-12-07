@@ -230,8 +230,8 @@ class _NewsPageState extends State<NewsPage> {
             const SizedBox(height: 8),
             ...List.generate(allFeeds.length, (index) {
               final item = allFeeds[index];
-              final nextItem = (index + 1 < allFeeds.length) ? allFeeds[index + 1] : null;
-              return _ArticleRow(item: item, nextItem: nextItem);
+              // Pass the full article list for navigation (respects current sort order and filters)
+              return _ArticleRow(item: item, allArticles: allFeeds);
             }),
             const SizedBox(height: 24),
           ],
@@ -565,17 +565,25 @@ class _UnreadChip extends StatelessWidget {
 
 class _ArticleRow extends StatelessWidget {
   final FeedItem item;
-  final FeedItem? nextItem;
-  const _ArticleRow({required this.item, this.nextItem});
+  final List<FeedItem> allArticles;
+  const _ArticleRow({required this.item, required this.allArticles});
 
   @override
   Widget build(BuildContext context) {
-    final rss = context.read<RssProvider>();
-    final ago = rss.niceTimeAgo(item.pubDate);
+    final rss = context.watch<RssProvider>();
+
+    // Find the latest version of this item from the provider for live updates
+    final currentItem = rss.items.firstWhere(
+      (i) => i.id == item.id,
+      orElse: () => item,
+    );
+
+    final ago = rss.niceTimeAgo(currentItem.pubDate);
     final agoLabel = ago.isNotEmpty ? ago : 'this article';
-    final isBookmarked = item.isBookmarked;
-    final bool isReadLike = item.isRead >= 1; // 1 and 2 both count as "read"
-    final bool hasMainArticle = (item.mainText ?? '').isNotEmpty;
+    final isBookmarked = currentItem.isBookmarked;
+    final bool isReadLike = currentItem.isRead >= 1; // 1 and 2 both count as "read"
+    final bool hasMainArticle = (currentItem.mainText ?? '').isNotEmpty;
+
     final Color unreadTitleColor = Theme.of(context).colorScheme.onSurface;
     final Color readTitleColor = Colors.grey.shade600;
 
@@ -587,11 +595,11 @@ class _ArticleRow extends StatelessWidget {
     );
 
     final Color metaColor =
-        item.isRead == 1 ? Colors.grey.shade500 : Colors.grey.shade700;
+        currentItem.isRead == 1 ? Colors.grey.shade500 : Colors.grey.shade700;
 
-    final thumbUrl = item.imageUrl ?? '';
+    final thumbUrl = currentItem.imageUrl ?? '';
     final url =
-        item.link; // if your model uses String?, make it `item.link ?? ''`
+        currentItem.link; // if your model uses String?, make it `item.link ?? ''`
     final Color accentRing =
         hasMainArticle ? Colors.green : Colors.grey.shade400;
     Widget _greyscaleIfMissingContent(Widget child) {
@@ -635,7 +643,7 @@ class _ArticleRow extends StatelessWidget {
     );
     return InkWell(
       onTap: () {
-        rss.markRead(item);
+        rss.markRead(currentItem);
         if (url.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('No article URL available.')));
@@ -644,16 +652,12 @@ class _ArticleRow extends StatelessWidget {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ArticleWebviewPage(
-              articleId: item.id,
+              articleId: currentItem.id,
               url: url,
-              title: item.title,
-              initialMainText: item.mainText,
-              initialImageUrl: item.imageUrl,
-              nextArticleId: nextItem?.id,
-              nextArticleUrl: nextItem?.link,
-              nextArticleTitle: nextItem?.title,
-              nextArticleInitialMainText: nextItem?.mainText,
-              nextArticleInitialImageUrl: nextItem?.imageUrl,
+              title: currentItem.title,
+              initialMainText: currentItem.mainText,
+              initialImageUrl: currentItem.imageUrl,
+              allArticles: allArticles,
             ),
           ),
         );
@@ -669,7 +673,7 @@ class _ArticleRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    item.sourceTitle,
+                    currentItem.sourceTitle,
                     style: TextStyle(
                         color: metaColor,
                         fontSize: 14,
@@ -677,7 +681,7 @@ class _ArticleRow extends StatelessWidget {
                         height: 1.4),
                   ),
                   const SizedBox(height: 6),
-                  Text(item.title, style: titleStyle),
+                  Text(currentItem.title, style: titleStyle),
                   const SizedBox(height: 8),
                   Text(ago,
                       style: TextStyle(
@@ -693,9 +697,9 @@ class _ArticleRow extends StatelessWidget {
                         icon: Icon(
                           isBookmarked ? Icons.bookmark : Icons.bookmark_border,
                           size: 20,
-                          color: item.isRead == 1 ? Colors.grey.shade600 : null,
+                          color: currentItem.isRead == 1 ? Colors.grey.shade600 : null,
                         ),
-                        onPressed: () => rss.toggleBookmark(item),
+                        onPressed: () => rss.toggleBookmark(currentItem),
                       ),
                       const SizedBox(width: 16),
                       IconButton(
@@ -705,10 +709,10 @@ class _ArticleRow extends StatelessWidget {
                         icon: Icon(Icons.share,
                             size: 20,
                             color:
-                                item.isRead == 1 ? Colors.grey.shade600 : null),
+                                currentItem.isRead == 1 ? Colors.grey.shade600 : null),
                         onPressed: () {
                           final shareText =
-                              '${item.title}\n${item.link ?? ''}'.trim();
+                              '${currentItem.title}\n${currentItem.link ?? ''}'.trim();
                           Share.share(shareText);
                         },
                       ),
@@ -720,7 +724,7 @@ class _ArticleRow extends StatelessWidget {
                         icon: Icon(Icons.more_vert,
                             size: 20,
                             color:
-                                item.isRead == 1 ? Colors.grey.shade600 : null),
+                                currentItem.isRead == 1 ? Colors.grey.shade600 : null),
                         onPressed: () {
                           showModalBottomSheet(
                             context: context,
@@ -738,11 +742,11 @@ class _ArticleRow extends StatelessWidget {
                                       ListTile(
                                         leading: const Icon(Icons.share),
                                         title: const Text('Share this article'),
-                                        subtitle: Text(item.sourceTitle),
+                                        subtitle: Text(currentItem.sourceTitle),
                                         onTap: () {
                                           Navigator.of(ctx).pop();
                                           final shareText =
-                                              '${item.title}\n${item.link ?? ''}'
+                                              '${currentItem.title}\n${currentItem.link ?? ''}'
                                                   .trim();
                                           Share.share(shareText);
                                         },
@@ -756,7 +760,7 @@ class _ArticleRow extends StatelessWidget {
                                             'Mark older items as hidden so they disappear from the list.'),
                                         onTap: () async {
                                           Navigator.of(ctx).pop();
-                                          if (item.pubDate == null) {
+                                          if (currentItem.pubDate == null) {
                                             ScaffoldMessenger.of(context)
                                                 .showSnackBar(
                                               const SnackBar(
@@ -765,7 +769,7 @@ class _ArticleRow extends StatelessWidget {
                                             );
                                             return;
                                           }
-                                          await rss.hideOlderThan(item);
+                                          await rss.hideOlderThan(currentItem);
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context)
                                                 .showSnackBar(

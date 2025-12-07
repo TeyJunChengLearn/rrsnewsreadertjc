@@ -11,8 +11,10 @@ import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../providers/settings_provider.dart';
+import '../providers/rss_provider.dart';
 import '../services/article_dao.dart';
 import '../services/readability_service.dart';
+import '../models/feed_item.dart';
 
 /// Map MLKit TranslateLanguage -> BCP-47 (for model downloads)
 String bcpFromTranslateLanguage(TranslateLanguage lang) {
@@ -210,12 +212,11 @@ class ArticleWebviewPage extends StatefulWidget {
   final String? initialMainText;
   final String? initialImageUrl;
 
-  // Next article for auto-advance
-  final String? nextArticleId;
-  final String? nextArticleUrl;
-  final String? nextArticleTitle;
-  final String? nextArticleInitialMainText;
-  final String? nextArticleInitialImageUrl;
+  // List of articles from news page (respects sort order and filters, excludes hidden)
+  final List<FeedItem> allArticles;
+
+  // Auto-play when opened from auto-advance
+  final bool autoPlay;
 
   const ArticleWebviewPage({
     super.key,
@@ -224,18 +225,15 @@ class ArticleWebviewPage extends StatefulWidget {
     this.articleId,
     this.initialMainText,
     this.initialImageUrl,
-    this.nextArticleId,
-    this.nextArticleUrl,
-    this.nextArticleTitle,
-    this.nextArticleInitialMainText,
-    this.nextArticleInitialImageUrl,
+    this.allArticles = const [],
+    this.autoPlay = false,
   });
 
   @override
   State<ArticleWebviewPage> createState() => _ArticleWebviewPageState();
 }
 
-class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
+class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBindingObserver {
   late final WebViewController _controller;
   final FlutterTts _tts = FlutterTts();
   final FlutterLocalNotificationsPlugin _notifications =
@@ -265,45 +263,39 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   bool _isTranslating = false;
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
-  bool _hasInternalPageInHistory = false;
   SettingsProvider? _settings;
   VoidCallback? _settingsListener;
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
 
   Future<bool> _handleBackNavigation() async {
-    await _stopSpeaking();
-
     if (!mounted) return true;
 
-    if (_readerOn) {
-      setState(() {
-        _readerOn = false;
-        _hasInternalPageInHistory = true;
-      });
-
-      await _controller.loadRequest(Uri.parse(widget.url));
-      return false;
-    }
-    if (_hasInternalPageInHistory) {
-      return true;
-    }
-    if (await _controller.canGoBack()) {
-      await _controller.goBack();
-      return false;
-    }
-
+    // Stop speaking and exit to news page in one press
+    await _stopSpeaking();
     return true;
   }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initWebView();
 
     _tts.setSharedInstance(true);
     _tts.setSpeechRate(0.5);
     _tts.setPitch(1.0);
+    // Enable background audio
+    _tts.setIosAudioCategory(
+      IosTextToSpeechAudioCategory.playback,
+      [
+        IosTextToSpeechAudioCategoryOptions.allowBluetooth,
+        IosTextToSpeechAudioCategoryOptions.allowBluetoothA2DP,
+        IosTextToSpeechAudioCategoryOptions.mixWithOthers,
+        IosTextToSpeechAudioCategoryOptions.duckOthers,
+      ],
+      IosTextToSpeechAudioMode.voicePrompt,
+    );
 
     _tts.setCompletionHandler(() async {
       if (!_isPlaying) return;
@@ -317,8 +309,28 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
      _attachSettingsListener();
     unawaited(_initNotifications());
     // Preload Readability text in background so TTS/translate work in both modes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _ensureLinesLoaded();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Check setting to determine initial view mode
+      final settings = context.read<SettingsProvider>();
+      final shouldOpenInReaderMode = settings.displaySummary;
+
+      if (shouldOpenInReaderMode) {
+        // Open in reader mode (summary view)
+        setState(() => _readerOn = true);
+        await _loadReaderContent();
+      }
+
+      await _ensureLinesLoaded();
+      // Auto-start playing if requested (e.g., from auto-advance)
+      if (widget.autoPlay && _lines.isNotEmpty) {
+        await _speakCurrentLine();
+      } else if (_currentLine > 0 && _lines.isNotEmpty) {
+        // If returning to a saved position, show subtle highlight
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (mounted && !_isPlaying) {
+          await _highlightLine(_currentLine);
+        }
+      }
     });
   }
  void _attachSettingsListener() {
@@ -413,7 +425,33 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: ios);
-    await _notifications.initialize(settings);
+    await _notifications.initialize(
+      settings,
+      onDidReceiveNotificationResponse: _handleNotificationAction,
+    );
+  }
+
+  void _handleNotificationAction(NotificationResponse response) {
+    if (!mounted || _disposed) return;
+
+    switch (response.actionId) {
+      case 'play_pause':
+        if (_isPlaying) {
+          _stopSpeaking();
+        } else {
+          _speakCurrentLine();
+        }
+        break;
+      case 'previous':
+        _speakPrevLine();
+        break;
+      case 'next':
+        _speakNextLine();
+        break;
+      case 'stop':
+        _stopSpeaking();
+        break;
+    }
   }
 
   Future<void> _loadReaderContent() async {
@@ -529,7 +567,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
 
     final html = _buildReaderHtml(_lines, _heroImageUrl);
-    _hasInternalPageInHistory = true;
 
     await _controller.loadRequest(
       Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
@@ -537,6 +574,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     if (showLoading && mounted) {
       setState(() => _isLoading = false);
+    }
+
+    // Immediately highlight current line after reload if playing
+    if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+      // Small delay to let the HTML render
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (mounted && _readerOn) {
+        await _highlightLine(_currentLine);
+      }
     }
   }
 
@@ -726,16 +772,22 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     // already translated -> back to original
     if (_isTranslatedView) {
       if (_originalLinesCache != null) {
+        final wasPlaying = _isPlaying;
         setState(() {
           _lines
             ..clear()
             ..addAll(_originalLinesCache!);
           _isTranslatedView = false;
-          _currentLine = 0;
+          // Keep current line position when reverting translation
           _webHighlightText = null;
         });
         await _reloadReaderHtml(showLoading: true);
         await _applyTtsLocale('en');
+
+        // If was playing before reverting translation, continue playing with original language
+        if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+          await _speakCurrentLine();
+        }
       }
       return;
     }
@@ -778,17 +830,23 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     if (!mounted) return;
 
+    final wasPlaying = _isPlaying;
     setState(() {
       _lines
         ..clear()
         ..addAll(translated);
       _isTranslatedView = true;
       _isTranslating = false;
-      _currentLine = 0;
+      // Keep current line position when translating
       _webHighlightText = null;
     });
     await _reloadReaderHtml(showLoading: true);
     await _applyTtsLocale(code);
+
+    // If was playing before translation, continue playing with new language
+    if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+      await _speakCurrentLine();
+    }
   }
 
   // --------------- TTS playback ---------------
@@ -921,6 +979,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       _currentLine = restoredLine;
       _readerHintVisible = !_readerOn && !_readerHintDismissed;
     });
+
+    // Show visual feedback if position was restored
+    if (savedPosition != null && savedPosition > 0 && savedPosition < combined.length && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Resuming from line ${savedPosition + 1}/${combined.length}'),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   /// Remove paywall overlays and unhide subscriber content in the live WebView
@@ -1052,6 +1121,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
       text = _normalizeForTts(text, targetCode);
     }
 
+    // Mark article as read when starting to speak (first time)
+    if (!_isPlaying && widget.articleId != null) {
+      _markArticleAsRead();
+    }
+
     // Highlight current line in reader mode (if setting ON)
     await _highlightLine(_currentLine);
 
@@ -1065,6 +1139,20 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     await _tts.speak(text);
   }
 
+  void _markArticleAsRead() {
+    if (widget.articleId == null) return;
+    try {
+      final rss = context.read<RssProvider>();
+      final article = rss.items.firstWhere(
+        (item) => item.id == widget.articleId,
+        orElse: () => throw Exception('Article not found'),
+      );
+      rss.markRead(article, read: 1);
+    } catch (_) {
+      // Ignore errors if article not found in provider
+    }
+  }
+
   Future<void> _speakNextLine({bool auto = false}) async {
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
@@ -1076,17 +1164,38 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     int i = _currentLine + 1;
 
     if (i >= _lines.length) {
-      setState(() => _isPlaying = false);
-      await _clearReadingNotification();
+      // If at the end of current article
+      if (auto) {
+        // Automatic completion - show timer and auto-advance
+        setState(() => _isPlaying = false);
 
-      // Start auto-advance timer if next article is available
-      if (widget.nextArticleUrl != null && widget.nextArticleUrl!.isNotEmpty) {
-        _startAutoAdvanceTimer();
+        // Keep notification visible at the end
+        if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+          await _showReadingNotification(_lines[_currentLine]);
+        }
+
+        // Start auto-advance timer if there's a next article available
+        if (_hasNextArticle()) {
+          _startAutoAdvanceTimer();
+        }
+      } else {
+        // Manual button press - immediately go to next article
+        if (_hasNextArticle()) {
+          _goToNextArticleNow();
+        } else {
+          // No more articles, just stop
+          setState(() => _isPlaying = false);
+          if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+            await _showReadingNotification(_lines[_currentLine]);
+          }
+        }
       }
       return;
     }
 
     setState(() => _currentLine = i);
+    // Auto-save position after moving to new line
+    unawaited(_saveReadingPosition());
     await _speakCurrentLine();
   }
 
@@ -1096,9 +1205,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     if (_lines.isEmpty) return;
 
     int i = _currentLine - 1;
-    if (i < 0) return;
+    // Just stop if at beginning, don't wrap around
+    if (i < 0) {
+      // Stop speaking if currently playing
+      if (_isPlaying) {
+        await _stopSpeaking();
+      }
+      return;
+    }
 
     setState(() => _currentLine = i);
+    // Auto-save position after moving to previous line
+    unawaited(_saveReadingPosition());
     await _speakCurrentLine();
   }
 
@@ -1107,7 +1225,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     await _tts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
-      await _clearReadingNotification();
+      // Save position when stopping
+      await _saveReadingPosition();
+      // Update notification to show paused state instead of clearing
+      if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+        await _showReadingNotification(_lines[_currentLine]);
+      }
     }
   }
 
@@ -1139,55 +1262,188 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     _autoAdvanceTimer = null;
   }
 
+  bool _hasNextArticle() {
+    if (widget.allArticles.isEmpty) return false;
+
+    // Find the current article's index in the list
+    final currentIndex = widget.allArticles.indexWhere(
+      (article) => article.id == widget.articleId,
+    );
+
+    // Check if there's a next article
+    return currentIndex >= 0 && currentIndex + 1 < widget.allArticles.length;
+  }
+
+  FeedItem? _getNextArticle() {
+    if (!_hasNextArticle()) return null;
+
+    final currentIndex = widget.allArticles.indexWhere(
+      (article) => article.id == widget.articleId,
+    );
+
+    if (currentIndex >= 0 && currentIndex + 1 < widget.allArticles.length) {
+      return widget.allArticles[currentIndex + 1];
+    }
+
+    return null;
+  }
+
+  bool _hasPreviousArticle() {
+    if (widget.allArticles.isEmpty) return false;
+
+    final currentIndex = widget.allArticles.indexWhere(
+      (article) => article.id == widget.articleId,
+    );
+
+    // Check if there's a previous article
+    return currentIndex > 0;
+  }
+
+  FeedItem? _getPreviousArticle() {
+    if (!_hasPreviousArticle()) return null;
+
+    final currentIndex = widget.allArticles.indexWhere(
+      (article) => article.id == widget.articleId,
+    );
+
+    if (currentIndex > 0) {
+      return widget.allArticles[currentIndex - 1];
+    }
+
+    return null;
+  }
+
   void _navigateToNextArticle() {
     if (!mounted || _disposed) return;
-    if (widget.nextArticleUrl == null || widget.nextArticleUrl!.isEmpty) return;
 
+    final nextArticle = _getNextArticle();
+    if (nextArticle == null) return;
+
+    // Keep using the same article list (maintains sort order and navigation position)
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => ArticleWebviewPage(
-          articleId: widget.nextArticleId,
-          url: widget.nextArticleUrl!,
-          title: widget.nextArticleTitle,
-          initialMainText: widget.nextArticleInitialMainText,
-          initialImageUrl: widget.nextArticleInitialImageUrl,
+          articleId: nextArticle.id,
+          url: nextArticle.link ?? '',
+          title: nextArticle.title,
+          initialMainText: nextArticle.mainText,
+          initialImageUrl: nextArticle.imageUrl,
+          allArticles: widget.allArticles,
+          autoPlay: true, // Auto-start playing the next article
         ),
       ),
     );
   }
 
-  Future<void> _goToFirst() async {
+  void _goToPreviousArticle() {
     _cancelAutoAdvanceTimer();
-    await _ensureLinesLoaded();
-    if (_lines.isEmpty) return;
+    if (!mounted || _disposed) return;
 
-    setState(() => _currentLine = 0);
-    await _speakCurrentLine();
+    final previousArticle = _getPreviousArticle();
+
+    // If no previous article, go back to news page
+    if (previousArticle == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+
+    // Keep using the same article list (maintains sort order and navigation position)
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ArticleWebviewPage(
+          articleId: previousArticle.id,
+          url: previousArticle.link ?? '',
+          title: previousArticle.title,
+          initialMainText: previousArticle.mainText,
+          initialImageUrl: previousArticle.imageUrl,
+          allArticles: widget.allArticles,
+          autoPlay: false, // Don't auto-play when going backwards
+        ),
+      ),
+    );
   }
 
-  Future<void> _goToLast() async {
+  void _goToNextArticleNow() {
     _cancelAutoAdvanceTimer();
-    await _ensureLinesLoaded();
-    if (_lines.isEmpty) return;
+    if (!mounted || _disposed) return;
 
-    final i = _lines.length - 1;
-    setState(() => _currentLine = i);
-    await _speakCurrentLine();
+    final nextArticle = _getNextArticle();
+    if (nextArticle == null) return;
+
+    // Keep using the same article list (maintains sort order and navigation position)
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ArticleWebviewPage(
+          articleId: nextArticle.id,
+          url: nextArticle.link ?? '',
+          title: nextArticle.title,
+          initialMainText: nextArticle.mainText,
+          initialImageUrl: nextArticle.imageUrl,
+          allArticles: widget.allArticles,
+          autoPlay: false, // Don't auto-play when manually skipping
+        ),
+      ),
+    );
   }
+
 
   Future<void> _showReadingNotification(String lineText) async {
     final title =
         (widget.title?.isNotEmpty ?? false) ? widget.title! : 'Reading article';
     final position = '${_currentLine + 1}/${_lines.length}';
+
+    // Truncate line text if too long for notification
+    final displayText = lineText.length > 100
+        ? '${lineText.substring(0, 97)}...'
+        : lineText;
+
+    // Create notification actions with Stop button
+    final List<AndroidNotificationAction> actions = [
+      const AndroidNotificationAction(
+        'previous',
+        'Previous',
+        icon: DrawableResourceAndroidBitmap('ic_skip_previous'),
+        showsUserInterface: false,
+      ),
+      AndroidNotificationAction(
+        'play_pause',
+        _isPlaying ? 'Pause' : 'Play',
+        icon: DrawableResourceAndroidBitmap(_isPlaying ? 'ic_pause' : 'ic_play'),
+        showsUserInterface: false,
+      ),
+      const AndroidNotificationAction(
+        'next',
+        'Next',
+        icon: DrawableResourceAndroidBitmap('ic_skip_next'),
+        showsUserInterface: false,
+      ),
+      const AndroidNotificationAction(
+        'stop',
+        'Stop',
+        icon: DrawableResourceAndroidBitmap('ic_pause'),
+        showsUserInterface: false,
+        cancelNotification: true,
+      ),
+    ];
+
     final android = AndroidNotificationDetails(
       'reading_channel',
       'Reading',
-      channelDescription: 'Shows the sentence currently being read aloud.',
+      channelDescription: 'Controls for text-to-speech reading.',
       importance: Importance.low,
       priority: Priority.low,
       ongoing: true,
       onlyAlertOnce: true,
-      styleInformation: BigTextStyleInformation('$lineText'),
+      autoCancel: false,
+      showWhen: true,
+      usesChronometer: _isPlaying,
+      styleInformation: MediaStyleInformation(
+        htmlFormatContent: true,
+        htmlFormatTitle: true,
+      ),
+      actions: actions,
+      subText: position,
+      ticker: 'Reading: $title',
     );
     const ios = DarwinNotificationDetails(
       presentAlert: false,
@@ -1197,8 +1453,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     await _notifications.show(
       _readingNotificationId,
-      '$title  ($position)',
-      lineText,
+      title,
+      displayText,
       NotificationDetails(android: android, iOS: ios),
     );
   }
@@ -1212,7 +1468,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     setState(() {
       _readerOn = !_readerOn;
       if (_readerOn) {
-        _hasInternalPageInHistory = true;
         _readerHintVisible = false;
       } else if (_lines.isNotEmpty && !_readerHintDismissed) {
         _readerHintVisible = true;
@@ -1221,16 +1476,52 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
     if (_readerOn) {
       await _loadReaderContent();
+      // Immediately highlight current line in reader mode if playing
+      if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+        await _highlightLine(_currentLine);
+      }
     } else {
-      await _stopSpeaking();
       // Go back to full website, but KEEP _lines so TTS still works
+      // Don't stop speaking - allow TTS to continue uninterrupted
       await _controller.loadRequest(Uri.parse(widget.url));
+
+      // Wait for page to load, then highlight current line in webview if playing
+      if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+        // Give webview a moment to render before injecting highlight
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (mounted && !_readerOn) {
+          await _highlightLine(_currentLine);
+        }
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    switch (state) {
+      case AppLifecycleState.paused:
+        // App going to background - save position
+        unawaited(_saveReadingPosition());
+        break;
+      case AppLifecycleState.resumed:
+        // App coming back to foreground - refresh notification if playing
+        if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+          unawaited(_showReadingNotification(_lines[_currentLine]));
+        }
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        break;
     }
   }
 
   @override
   void dispose() {
     _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     _cancelAutoAdvanceTimer();
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
@@ -1401,7 +1692,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
                   ),
                 ),
               ),
-              if (_paywallLikely)
+            if (_paywallLikely)
               Positioned(
                 top: 16,
                 left: 12,
@@ -1444,20 +1735,26 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
               children: [
                 IconButton(
                     icon: const Icon(Icons.skip_previous),
-                    onPressed: _goToFirst),
+                    onPressed: _goToPreviousArticle,
+                    tooltip: 'Previous article'),
                 IconButton(
                     icon: const Icon(Icons.fast_rewind),
-                    onPressed: _speakPrevLine),
+                    onPressed: _speakPrevLine,
+                    tooltip: 'Previous line'),
                 IconButton(
                   icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
                   onPressed: _isPlaying ? _stopSpeaking : _speakCurrentLine,
                   iconSize: 32,
+                  tooltip: _isPlaying ? 'Stop' : 'Play',
                 ),
                 IconButton(
                     icon: const Icon(Icons.fast_forward),
-                    onPressed: _speakNextLine),
+                    onPressed: _speakNextLine,
+                    tooltip: 'Next line'),
                 IconButton(
-                    icon: const Icon(Icons.skip_next), onPressed: _goToLast),
+                    icon: const Icon(Icons.skip_next),
+                    onPressed: _goToNextArticleNow,
+                    tooltip: 'Next article'),
               ],
             ),
           ),
