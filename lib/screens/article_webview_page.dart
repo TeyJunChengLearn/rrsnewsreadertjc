@@ -210,6 +210,13 @@ class ArticleWebviewPage extends StatefulWidget {
   final String? initialMainText;
   final String? initialImageUrl;
 
+  // Next article for auto-advance
+  final String? nextArticleId;
+  final String? nextArticleUrl;
+  final String? nextArticleTitle;
+  final String? nextArticleInitialMainText;
+  final String? nextArticleInitialImageUrl;
+
   const ArticleWebviewPage({
     super.key,
     required this.url,
@@ -217,6 +224,11 @@ class ArticleWebviewPage extends StatefulWidget {
     this.articleId,
     this.initialMainText,
     this.initialImageUrl,
+    this.nextArticleId,
+    this.nextArticleUrl,
+    this.nextArticleTitle,
+    this.nextArticleInitialMainText,
+    this.nextArticleInitialImageUrl,
   });
 
   @override
@@ -245,6 +257,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   // TTS state
   bool _isPlaying = false;
+
+  // Auto-advance state
+  Timer? _autoAdvanceTimer;
 
   // Translation state
   bool _isTranslating = false;
@@ -778,6 +793,31 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
 
   // --------------- TTS playback ---------------
 
+  Future<int?> _loadSavedReadingPosition() async {
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return null;
+
+    try {
+      final dao = context.read<ArticleDao>();
+      final row = await dao.findById(articleId);
+      return row?.readingPosition;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveReadingPosition() async {
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return;
+
+    try {
+      final dao = context.read<ArticleDao>();
+      await dao.updateReadingPosition(articleId, _currentLine);
+    } catch (_) {
+      // Ignore errors when saving position
+    }
+  }
+
   Future<ArticleReadabilityResult?> _loadCachedContent() async {
     final cachedText = widget.initialMainText?.trim() ?? '';
     final cachedImage = widget.initialImageUrl?.trim() ?? '';
@@ -866,12 +906,19 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     // after login, so don't block full-text articles just because markers
     // exist.
     final looksPaywalled = previewOnly || (pagePaywalled && rawLines.length <= 3);
+
+    // Load saved reading position
+    final savedPosition = await _loadSavedReadingPosition();
+    final restoredLine = (savedPosition != null && savedPosition < combined.length)
+        ? savedPosition
+        : 0;
+
     setState(() {
       _paywallLikely = looksPaywalled;
       _lines
         ..clear()
         ..addAll(combined);
-      _currentLine = 0;
+      _currentLine = restoredLine;
       _readerHintVisible = !_readerOn && !_readerHintDismissed;
     });
   }
@@ -986,6 +1033,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     return raw.toString();
   }
   Future<void> _speakCurrentLine() async {
+    _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
     if (_currentLine < 0 || _currentLine >= _lines.length) return;
@@ -1030,6 +1078,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     if (i >= _lines.length) {
       setState(() => _isPlaying = false);
       await _clearReadingNotification();
+
+      // Start auto-advance timer if next article is available
+      if (widget.nextArticleUrl != null && widget.nextArticleUrl!.isNotEmpty) {
+        _startAutoAdvanceTimer();
+      }
       return;
     }
 
@@ -1038,6 +1091,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   }
 
   Future<void> _speakPrevLine() async {
+    _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
 
@@ -1049,6 +1103,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   }
 
   Future<void> _stopSpeaking() async {
+    _cancelAutoAdvanceTimer();
     await _tts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
@@ -1056,7 +1111,53 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
     }
   }
 
+  void _startAutoAdvanceTimer() {
+    _cancelAutoAdvanceTimer();
+
+    // Show countdown snackbar
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Moving to next article in 5 seconds...'),
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: 'Cancel',
+            onPressed: _cancelAutoAdvanceTimer,
+          ),
+        ),
+      );
+    }
+
+    _autoAdvanceTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted || _disposed) return;
+      _navigateToNextArticle();
+    });
+  }
+
+  void _cancelAutoAdvanceTimer() {
+    _autoAdvanceTimer?.cancel();
+    _autoAdvanceTimer = null;
+  }
+
+  void _navigateToNextArticle() {
+    if (!mounted || _disposed) return;
+    if (widget.nextArticleUrl == null || widget.nextArticleUrl!.isEmpty) return;
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ArticleWebviewPage(
+          articleId: widget.nextArticleId,
+          url: widget.nextArticleUrl!,
+          title: widget.nextArticleTitle,
+          initialMainText: widget.nextArticleInitialMainText,
+          initialImageUrl: widget.nextArticleInitialImageUrl,
+        ),
+      ),
+    );
+  }
+
   Future<void> _goToFirst() async {
+    _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
 
@@ -1065,6 +1166,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   }
 
   Future<void> _goToLast() async {
+    _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
 
@@ -1129,11 +1231,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> {
   @override
   void dispose() {
     _disposed = true;
+    _cancelAutoAdvanceTimer();
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
     _tts.stop();
     unawaited(_clearReadingNotification());
+    unawaited(_saveReadingPosition());
     super.dispose();
   }
 

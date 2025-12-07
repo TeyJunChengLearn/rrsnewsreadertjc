@@ -150,4 +150,14 @@ class ArticleDao {
       where: 'COALESCE(isRead, 0) = 1',
     );
   }
+
+  Future<void> updateReadingPosition(String id, int? position) async {
+    final db = await _dbService.database;
+    await db.update(
+      'articles',
+      {'readingPosition': position},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }

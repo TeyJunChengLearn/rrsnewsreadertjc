@@ -10,6 +10,7 @@ class FeedItem {
 
   final int isRead;
   final bool isBookmarked;
+  final int? readingPosition;
 
   FeedItem({
     required this.id,
@@ -22,6 +23,7 @@ class FeedItem {
     this.mainText,
     this.isRead = 0,
     this.isBookmarked = false,
+    this.readingPosition,
   });
 
   FeedItem copyWith({
@@ -35,6 +37,7 @@ class FeedItem {
     String? mainText,
     int? isRead,
     bool? isBookmarked,
+    int? readingPosition,
   }) {
     return FeedItem(
       id: id ?? this.id,
@@ -47,6 +50,7 @@ class FeedItem {
       mainText: mainText ?? this.mainText,
       isRead: isRead ?? this.isRead,
       isBookmarked: isBookmarked ?? this.isBookmarked,
+      readingPosition: readingPosition ?? this.readingPosition,
     );
   }
 
@@ -69,6 +73,7 @@ class FeedItem {
       'mainText': mainText,
       'isRead': normalizedRead,
       'isBookmarked': isBookmarked ? 1 : 0,
+      'readingPosition': readingPosition,
     };
   }
 
@@ -88,6 +93,7 @@ class FeedItem {
       mainText: map['mainText'] as String?,
       isRead: (map['isRead'] as int?) ?? 0,
       isBookmarked: (map['isBookmarked'] ?? 0) == 1,
+      readingPosition: map['readingPosition'] as int?,
     );
   }
 }

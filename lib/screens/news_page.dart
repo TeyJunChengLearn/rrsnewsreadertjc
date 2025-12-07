@@ -228,7 +228,11 @@ class _NewsPageState extends State<NewsPage> {
             ],
 
             const SizedBox(height: 8),
-            ...allFeeds.map((it) => _ArticleRow(item: it)),
+            ...List.generate(allFeeds.length, (index) {
+              final item = allFeeds[index];
+              final nextItem = (index + 1 < allFeeds.length) ? allFeeds[index + 1] : null;
+              return _ArticleRow(item: item, nextItem: nextItem);
+            }),
             const SizedBox(height: 24),
           ],
         ),
@@ -561,7 +565,8 @@ class _UnreadChip extends StatelessWidget {
 
 class _ArticleRow extends StatelessWidget {
   final FeedItem item;
-  const _ArticleRow({required this.item});
+  final FeedItem? nextItem;
+  const _ArticleRow({required this.item, this.nextItem});
 
   @override
   Widget build(BuildContext context) {
@@ -644,6 +649,11 @@ class _ArticleRow extends StatelessWidget {
               title: item.title,
               initialMainText: item.mainText,
               initialImageUrl: item.imageUrl,
+              nextArticleId: nextItem?.id,
+              nextArticleUrl: nextItem?.link,
+              nextArticleTitle: nextItem?.title,
+              nextArticleInitialMainText: nextItem?.mainText,
+              nextArticleInitialImageUrl: nextItem?.imageUrl,
             ),
           ),
         );

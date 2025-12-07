@@ -13,7 +13,7 @@ class DatabaseService {
   factory DatabaseService() => _instance;
 
   static const _dbName = 'news_reader.db';
-  static const _dbVersion = 3;
+  static const _dbVersion = 4;
 
   Database? _db;
 
@@ -59,7 +59,8 @@ class DatabaseService {
         pubDateMillis INTEGER,
         mainText TEXT,
         isRead INTEGER NOT NULL DEFAULT 0,
-        isBookmarked INTEGER NOT NULL DEFAULT 0
+        isBookmarked INTEGER NOT NULL DEFAULT 0,
+        readingPosition INTEGER
       )
     ''');
   }
@@ -71,6 +72,10 @@ class DatabaseService {
       // Add WebView extraction support fields
       await db.execute('ALTER TABLE feed_sources ADD COLUMN delayTime INTEGER NOT NULL DEFAULT 2000');
       await db.execute('ALTER TABLE feed_sources ADD COLUMN requiresLogin INTEGER NOT NULL DEFAULT 0');
+    }
+    if (oldVersion < 4) {
+      // Add reading position tracking
+      await db.execute('ALTER TABLE articles ADD COLUMN readingPosition INTEGER');
     }
   }
 }
