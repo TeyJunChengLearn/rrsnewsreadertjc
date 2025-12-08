@@ -233,11 +233,194 @@ class ArticleWebviewPage extends StatefulWidget {
   State<ArticleWebviewPage> createState() => _ArticleWebviewPageState();
 }
 
+// Global TTS instance that persists across widget rebuilds (lazy initialization)
+FlutterTts? _globalTtsInstance;
+FlutterLocalNotificationsPlugin? _globalNotificationsInstance;
+
+FlutterTts get _globalTts {
+  if (_globalTtsInstance == null) {
+    _globalTtsInstance = FlutterTts();
+    _globalTtsInstance!.setSharedInstance(true);
+  }
+  return _globalTtsInstance!;
+}
+
+FlutterLocalNotificationsPlugin get _globalNotifications {
+  if (_globalNotificationsInstance == null) {
+    _globalNotificationsInstance = FlutterLocalNotificationsPlugin();
+  }
+  return _globalNotificationsInstance!;
+}
+
+// Global state for background playback
+class _TtsState {
+  List<String> lines = [];
+  int currentLine = 0;
+  bool isPlaying = false;
+  String articleId = '';
+  String articleTitle = '';
+  bool notificationsInitialized = false;
+  bool ttsInitialized = false;
+  bool readerModeOn = false; // Remember reader mode state
+
+  // Callback for widget-specific actions (set by current widget instance)
+  void Function(String actionId)? widgetActionHandler;
+
+  static final _TtsState instance = _TtsState._internal();
+  _TtsState._internal();
+}
+
+// Global notification action handler (works even when widget is disposed)
+@pragma('vm:entry-point')
+void _handleGlobalNotificationAction(NotificationResponse response) {
+  final actionId = response.actionId ?? '';
+  final state = _TtsState.instance;
+
+  // Try to delegate to widget-specific handler first (if widget is active)
+  if (state.widgetActionHandler != null) {
+    try {
+      state.widgetActionHandler!(actionId);
+      return;
+    } catch (_) {
+      // Widget handler failed, fall back to global handler
+    }
+  }
+
+  // Global handler for background playback
+  switch (actionId) {
+    case 'play_pause':
+      if (state.isPlaying) {
+        _globalTts.stop();
+        state.isPlaying = false;
+        if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
+          unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+        }
+      } else {
+        unawaited(_speakCurrentLineGlobal());
+      }
+      break;
+    case 'previous':
+      _globalTts.stop();
+      if (state.currentLine > 0) {
+        state.currentLine--;
+        unawaited(_speakCurrentLineGlobal());
+      }
+      break;
+    case 'next':
+      _globalTts.stop();
+      unawaited(_speakNextLineGlobal());
+      break;
+    default:
+      break;
+  }
+}
+
+// Global function to speak next line (works even when widget is disposed)
+Future<void> _speakNextLineGlobal({bool auto = false}) async {
+  final state = _TtsState.instance;
+  if (state.lines.isEmpty) return;
+
+  final nextLine = state.currentLine + 1;
+
+  if (nextLine >= state.lines.length) {
+    // Reached end of article
+    state.isPlaying = false;
+    if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
+      unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+    }
+    return;
+  }
+
+  state.currentLine = nextLine;
+  await _speakCurrentLineGlobal();
+}
+
+// Global function to speak current line
+Future<void> _speakCurrentLineGlobal() async {
+  final state = _TtsState.instance;
+  if (state.lines.isEmpty || state.currentLine >= state.lines.length || state.currentLine < 0) {
+    return;
+  }
+
+  final text = state.lines[state.currentLine].trim();
+  if (text.isEmpty) {
+    await _speakNextLineGlobal(auto: true);
+    return;
+  }
+
+  state.isPlaying = true;
+  await _showReadingNotificationGlobal(text);
+  await _globalTts.stop();
+  await _globalTts.speak(text);
+}
+
+// Global function to show notification
+Future<void> _showReadingNotificationGlobal(String lineText) async {
+  final state = _TtsState.instance;
+  final title = state.articleTitle.isNotEmpty ? state.articleTitle : 'Reading article';
+  final position = '${state.currentLine + 1}/${state.lines.length}';
+
+  final displayText = lineText.length > 100
+      ? '${lineText.substring(0, 97)}...'
+      : lineText;
+
+  final List<AndroidNotificationAction> actions = [
+    const AndroidNotificationAction(
+      'previous',
+      'Previous',
+      icon: DrawableResourceAndroidBitmap('ic_skip_previous'),
+      showsUserInterface: false,
+    ),
+    AndroidNotificationAction(
+      'play_pause',
+      state.isPlaying ? 'Pause' : 'Play',
+      icon: DrawableResourceAndroidBitmap(state.isPlaying ? 'ic_pause' : 'ic_play'),
+      showsUserInterface: false,
+    ),
+    const AndroidNotificationAction(
+      'next',
+      'Next',
+      icon: DrawableResourceAndroidBitmap('ic_skip_next'),
+      showsUserInterface: false,
+    ),
+  ];
+
+  final android = AndroidNotificationDetails(
+    'reading_channel',
+    'Reading',
+    channelDescription: 'Controls for text-to-speech reading.',
+    importance: Importance.low,
+    priority: Priority.low,
+    ongoing: true,
+    onlyAlertOnce: true,
+    autoCancel: false,
+    showWhen: true,
+    usesChronometer: state.isPlaying,
+    styleInformation: const MediaStyleInformation(
+      htmlFormatContent: true,
+      htmlFormatTitle: true,
+    ),
+    actions: actions,
+    subText: position,
+    ticker: 'Reading: $title',
+  );
+
+  const ios = DarwinNotificationDetails(
+    presentAlert: false,
+    presentSound: false,
+    presentBadge: false,
+  );
+
+  await _globalNotifications.show(
+    22,
+    title,
+    displayText,
+    NotificationDetails(android: android, iOS: ios),
+  );
+}
+
 class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBindingObserver {
   late final WebViewController _controller;
-  final FlutterTts _tts = FlutterTts();
-  final FlutterLocalNotificationsPlugin _notifications =
-      FlutterLocalNotificationsPlugin();
 
   bool _disposed = false;
 
@@ -249,12 +432,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   // Reader content (one line per highlightable/speakable chunk)
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
-  int _currentLine = 0;
   // Hero image from Readability result (used in reader HTML)
   String? _heroImageUrl;
 
-  // TTS state
-  bool _isPlaying = false;
+  // Use global state for TTS (persists after dispose)
+  _TtsState get _ttsState => _TtsState.instance;
+  int get _currentLine => _ttsState.currentLine;
+  set _currentLine(int value) => _ttsState.currentLine = value;
+  bool get _isPlaying => _ttsState.isPlaying;
+  set _isPlaying(bool value) => _ttsState.isPlaying = value;
 
   // Auto-advance state
   Timer? _autoAdvanceTimer;
@@ -268,25 +454,29 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
 
+  // Highlight operation tracking (to cancel stale highlights during rapid navigation)
+  int _highlightSequence = 0;
+  int _lastHighlightedLine = -1; // Track last highlighted line to prevent duplicates
+
   Future<bool> _handleBackNavigation() async {
     if (!mounted) return true;
 
-    // Stop speaking and exit to news page in one press
-    await _stopSpeaking();
+    // Allow back navigation without stopping reading
+    // TTS will continue in background, controlled via notification
     return true;
   }
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initWebView();
+  void _initTtsHandlers() {
+    final state = _TtsState.instance;
 
-    _tts.setSharedInstance(true);
-    _tts.setSpeechRate(0.5);
-    _tts.setPitch(1.0);
+    // Only initialize handlers once globally
+    if (state.ttsInitialized) return;
+
+    _globalTts.setSpeechRate(0.5);
+    _globalTts.setPitch(1.0);
+
     // Enable background audio
-    _tts.setIosAudioCategory(
+    _globalTts.setIosAudioCategory(
       IosTextToSpeechAudioCategory.playback,
       [
         IosTextToSpeechAudioCategoryOptions.allowBluetooth,
@@ -297,22 +487,91 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       IosTextToSpeechAudioMode.voicePrompt,
     );
 
-    _tts.setCompletionHandler(() async {
-      if (!_isPlaying) return;
-      await _speakNextLine(auto: true);
-    });
-    _tts.setCancelHandler(() {
-      if (mounted) {
-        setState(() => _isPlaying = false);
+    _globalTts.setCompletionHandler(() async {
+      final s = _TtsState.instance;
+      // Continue playing in background using global function
+      if (!s.isPlaying) {
+        // Update notification to paused
+        if (s.lines.isNotEmpty && s.currentLine >= 0 && s.currentLine < s.lines.length) {
+          unawaited(_showReadingNotificationGlobal(s.lines[s.currentLine]));
+        }
+        return;
+      }
+      // If widget is still mounted, use instance method to update highlight
+      // Otherwise use global function for background playback
+      if (mounted && !_disposed) {
+        await _speakNextLine(auto: true);
+      } else {
+        await _speakNextLineGlobal(auto: true);
       }
     });
-     _attachSettingsListener();
+
+    _globalTts.setCancelHandler(() {
+      _TtsState.instance.isPlaying = false;
+      // Update notification when cancelled
+      final s = _TtsState.instance;
+      if (s.lines.isNotEmpty && s.currentLine >= 0 && s.currentLine < s.lines.length) {
+        unawaited(_showReadingNotificationGlobal(s.lines[s.currentLine]));
+      }
+    });
+
+    state.ttsInitialized = true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initWebView();
+
+    // Initialize TTS handlers only once globally
+    _initTtsHandlers();
+
+    // Register this widget's notification action handler
+    _ttsState.widgetActionHandler = _handleWidgetNotificationAction;
+
+    // Check if opening a different article - if so, stop TTS and clear state
+    final currentArticleId = widget.articleId ?? '';
+    final globalArticleId = _ttsState.articleId;
+    final isDifferentArticle = globalArticleId.isNotEmpty &&
+                                currentArticleId.isNotEmpty &&
+                                globalArticleId != currentArticleId;
+
+    if (isDifferentArticle) {
+      // Stop TTS playback for the previous article
+      _globalTts.stop();
+      _ttsState.isPlaying = false;
+      _ttsState.currentLine = 0;
+      _ttsState.lines.clear();
+      _ttsState.articleId = '';
+      _ttsState.articleTitle = '';
+      _ttsState.readerModeOn = false; // Reset reader mode for new article
+      // Reset highlight tracking for new article
+      _lastHighlightedLine = -1;
+      // Clear the notification
+      unawaited(_clearReadingNotification());
+    }
+
+    _attachSettingsListener();
     unawaited(_initNotifications());
     // Preload Readability text in background so TTS/translate work in both modes
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Check setting to determine initial view mode
+      // Determine initial view mode
       final settings = context.read<SettingsProvider>();
-      final shouldOpenInReaderMode = settings.displaySummary;
+      final bool shouldOpenInReaderMode;
+
+      // If returning to the same article, restore previous reader mode state
+      final isSameArticle = currentArticleId.isNotEmpty &&
+                            globalArticleId.isNotEmpty &&
+                            globalArticleId == currentArticleId;
+
+      if (isSameArticle) {
+        // Restore reader mode from global state
+        shouldOpenInReaderMode = _ttsState.readerModeOn;
+      } else {
+        // New article - use settings preference
+        shouldOpenInReaderMode = settings.displaySummary;
+      }
 
       if (shouldOpenInReaderMode) {
         // Open in reader mode (summary view)
@@ -324,9 +583,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Auto-start playing if requested (e.g., from auto-advance)
       if (widget.autoPlay && _lines.isNotEmpty) {
         await _speakCurrentLine();
-      } else if (_currentLine > 0 && _lines.isNotEmpty) {
-        // If returning to a saved position, show subtle highlight
-        await Future.delayed(const Duration(milliseconds: 500));
+      } else if (_lines.isNotEmpty && !_isPlaying) {
+        // If returning to a saved position (or starting fresh), show highlight
+        // In reader mode, show immediately after HTML loads
+        // In web mode, add delay to ensure page is ready
+        final delay = _readerOn
+            ? const Duration(milliseconds: 200)
+            : const Duration(milliseconds: 800);
+        await Future.delayed(delay);
         if (mounted && !_isPlaying) {
           await _highlightLine(_currentLine);
         }
@@ -349,14 +613,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final settings = _settings ?? context.read<SettingsProvider>();
     _settings ??= settings;
     final rate = settings.ttsSpeechRate;
-    _tts.setSpeechRate(rate);
+    _globalTts.setSpeechRate(rate);
   }
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   Future<void> _applyTtsLocale(String bcpCode) async {
-    await _tts.setLanguage(_ttsLocaleForCode(bcpCode));
+    await _globalTts.setLanguage(_ttsLocaleForCode(bcpCode));
     try {
-      final List<dynamic>? voices = await _tts.getVoices;
+      final List<dynamic>? voices = await _globalTts.getVoices;
       if (voices == null || voices.isEmpty) return;
 
       final lc = bcpCode.toLowerCase();
@@ -384,7 +648,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       if (chosen.isEmpty) return;
 
-      await _tts.setVoice({
+      await _globalTts.setVoice({
         'name': chosen['name'],
         'locale': chosen['locale'],
       });
@@ -422,34 +686,45 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   }
 
   Future<void> _initNotifications() async {
+    // Only initialize once globally to avoid delays
+    if (_TtsState.instance.notificationsInitialized) return;
+
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: ios);
-    await _notifications.initialize(
+    await _globalNotifications.initialize(
       settings,
-      onDidReceiveNotificationResponse: _handleNotificationAction,
+      onDidReceiveNotificationResponse: _handleGlobalNotificationAction,
+      onDidReceiveBackgroundNotificationResponse: _handleGlobalNotificationAction,
     );
+
+    _TtsState.instance.notificationsInitialized = true;
   }
 
-  void _handleNotificationAction(NotificationResponse response) {
+  void _handleWidgetNotificationAction(String actionId) {
+    // Widget-specific notification action handler (called from global handler)
+    // Only handles actions when widget is mounted and active
     if (!mounted || _disposed) return;
 
-    switch (response.actionId) {
+    final state = _TtsState.instance;
+
+    switch (actionId) {
       case 'play_pause':
-        if (_isPlaying) {
-          _stopSpeaking();
+        if (state.isPlaying) {
+          unawaited(_stopSpeaking());
         } else {
-          _speakCurrentLine();
+          unawaited(_speakCurrentLine());
         }
+        setState(() {});
         break;
       case 'previous':
-        _speakPrevLine();
+        unawaited(_speakPrevLine());
         break;
       case 'next':
-        _speakNextLine();
+        _globalTts.stop();
+        unawaited(_speakNextLine());
         break;
-      case 'stop':
-        _stopSpeaking();
+      default:
         break;
     }
   }
@@ -492,25 +767,85 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final settings = context.read<SettingsProvider>();
     if (!settings.highlightText) return;
 
+    // Skip if already highlighting this exact line (prevents duplicate highlights)
+    if (_lastHighlightedLine == index && _highlightSequence > 0) {
+      return;
+    }
+
+    // Increment sequence to cancel any in-progress highlight operations
+    _highlightSequence++;
+    final currentSequence = _highlightSequence;
+
+    bool highlightSucceeded = false;
+
     if (_readerOn) {
       // Clear any lingering overlay highlight when we switch to reader mode
       if (_webHighlightText != null) {
         setState(() => _webHighlightText = null);
       }
 
-      try {
-        await _controller.runJavaScript(
-          'window.flutterHighlightLine && window.flutterHighlightLine($index);',
-        );
-      } catch (_) {
-        // ignore JS errors
+      // Retry highlighting up to 3 times with delays to ensure page is ready
+      for (int attempt = 0; attempt < 3; attempt++) {
+        // Check if this highlight operation has been superseded
+        if (!mounted || !_readerOn || _highlightSequence != currentSequence) break;
+
+        try {
+          // Small delay to ensure DOM is ready (only on retry)
+          if (attempt > 0) {
+            await Future.delayed(Duration(milliseconds: 100 * attempt));
+            // Check again after delay
+            if (_highlightSequence != currentSequence) break;
+          }
+
+          final result = await _controller.runJavaScriptReturningResult(
+            'window.flutterHighlightLine && window.flutterHighlightLine($index);',
+          );
+
+          // Check if the JavaScript function returned true (found the element)
+          if (result == true || result.toString() == 'true') {
+            highlightSucceeded = true;
+            break;
+          }
+        } catch (e) {
+          // Continue to next attempt on error
+          print('Highlight attempt $attempt failed for line $index: $e');
+        }
+      }
+
+      // If all retries failed, still mark as succeeded to allow future highlights
+      if (!highlightSucceeded && mounted && _readerOn) {
+        print('Warning: All highlight attempts failed for reader mode line $index');
+        highlightSucceeded = true; // Don't block future attempts
       }
     } else {
       if (index < 0 || index >= _lines.length) return;
       final text = _lines[index].trim();
       if (text.isEmpty) return;
-      setState(() => _webHighlightText = text);
-      await _highlightInWebPage(text);
+
+      if (mounted) {
+        setState(() => _webHighlightText = text);
+      }
+
+      // Add small delay to ensure page is ready
+      await Future.delayed(const Duration(milliseconds: 100));
+      // Check if this operation has been superseded
+      if (mounted && !_readerOn && _highlightSequence == currentSequence) {
+        try {
+          await _highlightInWebPage(text);
+          highlightSucceeded = true;
+        } catch (e) {
+          print('Webview highlight failed for line $index: $e');
+          highlightSucceeded = true; // Don't block future attempts
+        }
+      } else {
+        highlightSucceeded = true; // Was superseded, but don't block
+      }
+    }
+
+    // Only update _lastHighlightedLine if we actually tried to highlight
+    // (prevents blocking if operation was cancelled early)
+    if (highlightSucceeded && _highlightSequence == currentSequence) {
+      _lastHighlightedLine = index;
     }
   }
 
@@ -521,37 +856,123 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 (function(txt){
   if(!txt){return;}
   const cls='flutter-tts-highlight';
+
+  // Remove old highlights
   document.querySelectorAll('mark.'+cls).forEach(m=>{
     const parent=m.parentNode;
     if(!parent){return;}
     parent.replaceChild(document.createTextNode(m.textContent||''), m);
     parent.normalize();
   });
-  const regexText = txt.replace(/[.*+?^\${}()|[\\]\\\\]/g,"\\\\\$&");
-  const regex = new RegExp(regexText,'i');
-  function walk(node){
-    if(!node){return false;}
-    if(node.nodeType===3){
-      const match = regex.exec(node.data);
-      if(match){
-        const range=document.createRange();
-        range.setStart(node, match.index);
-        range.setEnd(node, match.index + match[0].length);
-        const mark=document.createElement('mark');
-        mark.className=cls;
-        mark.style.backgroundColor='rgba(255,235,59,0.4)';
+
+  // Normalize search text (remove extra whitespace)
+  const searchText = txt.trim().replace(/\\s+/g, ' ').toLowerCase();
+
+  // Find all text-containing elements (paragraphs, divs, articles, etc.)
+  const containers = Array.from(document.querySelectorAll('p, div, article, section, main, li, td, th, span, a, h1, h2, h3, h4, h5, h6'));
+
+  for(let container of containers){
+    // Get the combined text content of this container
+    const containerText = container.textContent || '';
+    const normalizedText = containerText.trim().replace(/\\s+/g, ' ').toLowerCase();
+
+    // Check if search text is in this container
+    const startIndex = normalizedText.indexOf(searchText);
+    if(startIndex === -1) continue;
+
+    // Found a match! Now highlight it
+    try {
+      // Create a tree walker to find all text nodes
+      const walker = document.createTreeWalker(
+        container,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      let textNodes = [];
+      let node;
+      while(node = walker.nextNode()){
+        if(node.nodeValue && node.nodeValue.trim()){
+          textNodes.push(node);
+        }
+      }
+
+      // Calculate character positions
+      let charCount = 0;
+      let startNode = null, startOffset = 0;
+      let endNode = null, endOffset = 0;
+      let searchEndIndex = startIndex + searchText.length;
+
+      for(let textNode of textNodes){
+        const nodeText = textNode.nodeValue || '';
+        const nodeLength = nodeText.length;
+
+        // Check if this node contains the start
+        if(startNode === null && charCount + nodeLength > startIndex){
+          startNode = textNode;
+          startOffset = startIndex - charCount;
+        }
+
+        // Check if this node contains the end
+        if(endNode === null && charCount + nodeLength >= searchEndIndex){
+          endNode = textNode;
+          endOffset = searchEndIndex - charCount;
+          break;
+        }
+
+        charCount += nodeLength;
+      }
+
+      // Create range and highlight
+      if(startNode && endNode){
+        const range = document.createRange();
+        range.setStart(startNode, Math.max(0, startOffset));
+        range.setEnd(endNode, Math.min(endNode.nodeValue.length, endOffset));
+
+        const mark = document.createElement('mark');
+        mark.className = cls;
+        mark.style.backgroundColor = 'rgba(255,235,59,0.4)';
+        mark.style.padding = '2px 0';
+
         range.surroundContents(mark);
         mark.scrollIntoView({behavior:'smooth', block:'center'});
-        return true;
+        return; // Found and highlighted, exit
+      }
+    } catch(e) {
+      // If highlighting fails for this container, continue to next
+      console.log('Highlight error:', e);
+    }
+  }
+
+  // Fallback: Try simple text node search (original method)
+  function simpleWalk(node){
+    if(!node){return false;}
+    if(node.nodeType===3){
+      const nodeText = (node.data || '').toLowerCase();
+      const searchLower = searchText.toLowerCase();
+      const index = nodeText.indexOf(searchLower);
+      if(index !== -1){
+        try{
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + searchText.length);
+          const mark = document.createElement('mark');
+          mark.className = cls;
+          mark.style.backgroundColor = 'rgba(255,235,59,0.4)';
+          range.surroundContents(mark);
+          mark.scrollIntoView({behavior:'smooth', block:'center'});
+          return true;
+        }catch(e){}
       }
     }
     const children = Array.from(node.childNodes||[]);
-    for(let i=0;i<children.length;i++){
-      if(walk(children[i])) return true;
+    for(let i=0; i<children.length; i++){
+      if(simpleWalk(children[i])) return true;
     }
     return false;
   }
-  walk(document.body);
+  simpleWalk(document.body);
 })($escaped);
 ''';
       await _controller.runJavaScript(script);
@@ -576,11 +997,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       setState(() => _isLoading = false);
     }
 
-    // Immediately highlight current line after reload if playing
-    if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+    // Highlight current line after reload (whether playing or not)
+    if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
       // Small delay to let the HTML render
       await Future.delayed(const Duration(milliseconds: 200));
       if (mounted && _readerOn) {
+        // Reset lastHighlightedLine to force re-highlight after HTML reload
+        _lastHighlightedLine = -1;
         await _highlightLine(_currentLine);
       }
     }
@@ -601,16 +1024,32 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         '</style>');
     buffer.writeln('<script>'
         'window.flutterHighlightLine=function(index){'
+        'try{'
         'var paras=document.querySelectorAll("p[data-idx]");'
+        'var found=false;'
         'for(var i=0;i<paras.length;i++){'
         'var el=paras[i];'
         'var idx=parseInt(el.getAttribute("data-idx")||"-1");'
         'if(idx===index){'
         'el.classList.add("hl");'
+        // Cancel any ongoing smooth scroll and use instant scroll for rapid navigation
+        'if(window.scrollTimeout){clearTimeout(window.scrollTimeout);}'
+        'el.scrollIntoView({behavior:"instant",block:"center"});'
+        // Then apply a smooth scroll after a brief delay for better UX
+        'window.scrollTimeout=setTimeout(function(){'
+        'if(el.classList.contains("hl")){'
         'el.scrollIntoView({behavior:"smooth",block:"center"});'
+        '}'
+        '},50);'
+        'found=true;'
         '}else{'
         'el.classList.remove("hl");'
         '}'
+        '}'
+        'return found;'
+        '}catch(e){'
+        'console.error("Highlight error:",e);'
+        'return false;'
         '}'
         '};'
         '</script>');
@@ -780,6 +1219,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           _isTranslatedView = false;
           // Keep current line position when reverting translation
           _webHighlightText = null;
+          // Reset highlight tracking since content changed
+          _lastHighlightedLine = -1;
         });
         await _reloadReaderHtml(showLoading: true);
         await _applyTtsLocale('en');
@@ -839,6 +1280,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _isTranslating = false;
       // Keep current line position when translating
       _webHighlightText = null;
+      // Reset highlight tracking since content changed
+      _lastHighlightedLine = -1;
     });
     await _reloadReaderHtml(showLoading: true);
     await _applyTtsLocale(code);
@@ -1129,14 +1572,23 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     // Highlight current line in reader mode (if setting ON)
     await _highlightLine(_currentLine);
 
+    // Sync global state with local lines
+    _ttsState.lines = _lines;
+    _ttsState.articleId = widget.articleId ?? '';
+    _ttsState.articleTitle = widget.title ?? '';
+    _ttsState.readerModeOn = _readerOn; // Save reader mode state
+
+    // Stop any currently playing TTS first (before setting state)
+    await _globalTts.stop();
+    _applySpeechRateFromSettings();
+
+    // Now set playing state and start speaking
     setState(() {
       _isPlaying = true;
       _webHighlightText = null;
     });
     await _showReadingNotification(text);
-    _applySpeechRateFromSettings();
-    await _tts.stop();
-    await _tts.speak(text);
+    await _globalTts.speak(text);
   }
 
   void _markArticleAsRead() {
@@ -1154,6 +1606,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   }
 
   Future<void> _speakNextLine({bool auto = false}) async {
+    // Cancel auto-advance timer when manually navigating
+    if (!auto) {
+      _cancelAutoAdvanceTimer();
+    }
+
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
       setState(() => _isPlaying = false);
@@ -1222,7 +1679,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
   Future<void> _stopSpeaking() async {
     _cancelAutoAdvanceTimer();
-    await _tts.stop();
+    await _globalTts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
       // Save position when stopping
@@ -1230,6 +1687,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Update notification to show paused state instead of clearing
       if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
         await _showReadingNotification(_lines[_currentLine]);
+        // Keep the highlight visible at the stopped position
+        await _highlightLine(_currentLine);
       }
     }
   }
@@ -1397,7 +1856,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         ? '${lineText.substring(0, 97)}...'
         : lineText;
 
-    // Create notification actions with Stop button
+    // Create notification actions
     final List<AndroidNotificationAction> actions = [
       const AndroidNotificationAction(
         'previous',
@@ -1416,13 +1875,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         'Next',
         icon: DrawableResourceAndroidBitmap('ic_skip_next'),
         showsUserInterface: false,
-      ),
-      const AndroidNotificationAction(
-        'stop',
-        'Stop',
-        icon: DrawableResourceAndroidBitmap('ic_pause'),
-        showsUserInterface: false,
-        cancelNotification: true,
       ),
     ];
 
@@ -1451,7 +1903,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       presentBadge: false,
     );
 
-    await _notifications.show(
+    await _globalNotifications.show(
       _readingNotificationId,
       title,
       displayText,
@@ -1460,7 +1912,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   }
 
   Future<void> _clearReadingNotification() async {
-    await _notifications.cancel(_readingNotificationId);
+    await _globalNotifications.cancel(_readingNotificationId);
   }
   // --------------- UI ---------------
 
@@ -1472,21 +1924,29 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       } else if (_lines.isNotEmpty && !_readerHintDismissed) {
         _readerHintVisible = true;
       }
+      // Reset highlight tracking when switching modes to ensure highlight shows
+      _lastHighlightedLine = -1;
     });
+
+    // Save reader mode state globally so it persists when returning to this article
+    _ttsState.readerModeOn = _readerOn;
 
     if (_readerOn) {
       await _loadReaderContent();
-      // Immediately highlight current line in reader mode if playing
-      if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
-        await _highlightLine(_currentLine);
+      // Highlight current line in reader mode (whether playing or just viewing saved position)
+      if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (mounted && _readerOn) {
+          await _highlightLine(_currentLine);
+        }
       }
     } else {
       // Go back to full website, but KEEP _lines so TTS still works
       // Don't stop speaking - allow TTS to continue uninterrupted
       await _controller.loadRequest(Uri.parse(widget.url));
 
-      // Wait for page to load, then highlight current line in webview if playing
-      if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+      // Wait for page to load, then highlight current line in webview
+      if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
         // Give webview a moment to render before injecting highlight
         await Future.delayed(const Duration(milliseconds: 800));
         if (mounted && !_readerOn) {
@@ -1506,9 +1966,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         unawaited(_saveReadingPosition());
         break;
       case AppLifecycleState.resumed:
-        // App coming back to foreground - refresh notification if playing
-        if (_isPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
-          unawaited(_showReadingNotification(_lines[_currentLine]));
+        // App coming back to foreground - refresh notification and highlight
+        if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+          if (_isPlaying) {
+            unawaited(_showReadingNotification(_lines[_currentLine]));
+          }
+          // Show highlight at current position
+          unawaited(_highlightLine(_currentLine));
         }
         break;
       case AppLifecycleState.inactive:
@@ -1526,8 +1990,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
-    _tts.stop();
-    unawaited(_clearReadingNotification());
+    // Unregister widget-specific notification handler
+    // The global handler will take over for background playback
+    if (_ttsState.widgetActionHandler == _handleWidgetNotificationAction) {
+      _ttsState.widgetActionHandler = null;
+    }
+    // TTS continues playing in background via global instance
+    // Notification buttons remain functional via global handler
+    // Auto-advance is stopped (handled in completion handler checking _disposed)
     unawaited(_saveReadingPosition());
     super.dispose();
   }
