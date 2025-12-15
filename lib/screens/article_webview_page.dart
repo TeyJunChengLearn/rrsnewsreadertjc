@@ -704,9 +704,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // This ensures the rate persists even when widget is disposed
       _globalTts.setSpeechRate(rate);
 
-      // Note: FlutterTTS speech rate changes may only apply to NEW utterances
-      // The current utterance may continue at the old rate on some platforms
-      // To force immediate change, we would need to stop and restart playback
+      // If currently playing, restart playback to apply the new rate immediately
+      // FlutterTTS speech rate changes only apply to NEW utterances on most platforms
+      if (_isPlaying) {
+        _globalTts.stop();
+        _speakCurrentLine();
+      }
     } catch (e) {
       // Context might not be available yet, try again later
       WidgetsBinding.instance.addPostFrameCallback((_) {
