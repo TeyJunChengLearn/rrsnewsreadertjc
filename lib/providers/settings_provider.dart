@@ -41,8 +41,7 @@ class SettingsProvider extends ChangeNotifier {
         prefs.getString(_kTranslateLangKey) ?? _translateLangCode;
 
     notifyListeners();
-    }
-
+  }
 
   Future<void> toggleDarkTheme(bool val) async {
     _darkTheme = val;
@@ -71,22 +70,24 @@ class SettingsProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kUpdateIntervalMinutes, _updateIntervalMinutes);
   }
-Future<void> setTtsSpeechRate(double rate) async {
+
+  Future<void> setTtsSpeechRate(double rate) async {
     // Keep within a human-friendly range supported by most platforms
-    _ttsSpeechRate = rate.clamp(0.3, 1.2);
+    _ttsSpeechRate = rate.clamp(0.3, 1.2).toDouble();
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kTtsSpeechRate, _ttsSpeechRate);
   }
-Future<void> setArticleLimitPerFeed(int value) async {
-  // clamp to 10–10 000
-  value = value.clamp(10, 10000);
-  _articleLimitPerFeed = value;
 
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setInt(_kArticleLimitPerFeed, _articleLimitPerFeed);
-  notifyListeners();
-}
+  Future<void> setArticleLimitPerFeed(int value) async {
+    // clamp to 10–10 000
+    value = value.clamp(10, 10000);
+    _articleLimitPerFeed = value;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kArticleLimitPerFeed, _articleLimitPerFeed);
+    notifyListeners();
+  }
   static const _kTranslateLangKey = 'translate_lang_code';
   // Codes: 'off', 'en', 'ms', 'zh-CN', 'zh-TW', 'ja', 'ko', 'id', 'th', 'vi',
   // 'ar', 'fr', 'es', 'de', 'pt', 'it', 'ru', 'hi'
