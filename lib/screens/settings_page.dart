@@ -100,62 +100,71 @@ class SettingsPage extends StatelessWidget {
 
               await showModalBottomSheet<void>(
                 context: context,
+                isScrollControlled: true,
+                showDragHandle: true,
                 builder: (context) {
                   return StatefulBuilder(
                     builder: (context, setSheetState) {
-                      return Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Article limit for each feed',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                      return SingleChildScrollView(
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: 16,
+                            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Article limit for each feed',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text('10'),
-                                Text('$temp'),
-                                const Text('10000'),
-                              ],
-                            ),
-                            Slider(
-                              min: 10,
-                              max: 10000,
-                              divisions: 999, // step 10
-                              value: temp.toDouble().clamp(10, 10000),
-                              label: '$temp',
-                              onChanged: (v) {
-                                setSheetState(() {
-                                  temp = (v / 10).round() * 10; // snap to 10s
-                                });
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(context).pop(),
-                                  child: const Text('Cancel'),
-                                ),
-                                const SizedBox(width: 8),
-                                ElevatedButton(
-                                  onPressed: () {
-                                    d.setArticleLimitPerFeed(temp);
-                                    Navigator.of(context).pop();
-                                  },
-                                  child: const Text('Save'),
-                                ),
-                              ],
-                            ),
-                          ],
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('10'),
+                                  Text('$temp'),
+                                  const Text('10000'),
+                                ],
+                              ),
+                              Slider(
+                                min: 10,
+                                max: 10000,
+                                divisions: 999, // step 10
+                                value: temp.toDouble().clamp(10, 10000),
+                                label: '$temp',
+                                onChanged: (v) {
+                                  setSheetState(() {
+                                    temp = (v / 10).round() * 10; // snap to 10s
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(context).pop(),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      d.setArticleLimitPerFeed(temp);
+                                      Navigator.of(context).pop();
+                                    },
+                                    child: const Text('Save'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -233,75 +242,83 @@ class SettingsPage extends StatelessWidget {
 
               await showModalBottomSheet<void>(
                 context: context,
+                isScrollControlled: true,
                 showDragHandle: true,
                 builder: (context) {
                   return StatefulBuilder(
                     builder: (context, setSheetState) {
-                      return Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Voice speed',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                      return SingleChildScrollView(
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: 16,
+                            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Voice speed',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text('0.3x'),
-                                Text('${temp.toStringAsFixed(2)}x'),
-                                const Text('1.2x'),
-                              ],
-                            ),
-                            Slider(
-                              min: 0.3,
-                              max: 1.2,
-                              divisions: 9,
-                              value: temp.clamp(0.3, 1.2).toDouble(),
-                              label: '${temp.toStringAsFixed(2)}x',
-                              onChanged: (v) {
-                                setSheetState(() {
-                                  temp = v.clamp(0.3, 1.2).toDouble();
-                                });
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Adjusts the spoken speed for articles, including Reader mode.',
-                              style: TextStyle(color: Colors.black54),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                TextButton(
-                                  onPressed: () => Navigator.of(context).pop(),
-                                  child: const Text('Cancel'),
-                                ),
-                                const SizedBox(width: 8),
-                                ElevatedButton(
-                                  onPressed: () async {
-                                    // Properly await the async call
-                                    try {
-                                      await d.setTtsSpeechRate(temp);
-                                    } catch (e) {
-                                      // Silently handle error
-                                    }
-                                    if (context.mounted) {
-                                      Navigator.of(context).pop();
-                                    }
-                                  },
-                                  child: const Text('Save'),
-                                ),
-                              ],
-                            ),
-                          ],
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('0.3x'),
+                                  Text('${temp.toStringAsFixed(2)}x'),
+                                  const Text('1.2x'),
+                                ],
+                              ),
+                              Slider(
+                                min: 0.3,
+                                max: 1.2,
+                                divisions: 9,
+                                value: temp.clamp(0.3, 1.2).toDouble(),
+                                label: '${temp.toStringAsFixed(2)}x',
+                                onChanged: (v) {
+                                  setSheetState(() {
+                                    temp = v.clamp(0.3, 1.2).toDouble();
+                                  });
+                                },
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Adjusts the spoken speed for articles, including Reader mode.',
+                                style: TextStyle(color: Colors.black54),
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(context).pop(),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                    onPressed: () async {
+                                      // Properly await the async call
+                                      try {
+                                        await d.setTtsSpeechRate(temp);
+                                      } catch (e) {
+                                        // Silently handle error
+                                      }
+                                      if (context.mounted) {
+                                        Navigator.of(context).pop();
+                                      }
+                                    },
+                                    child: const Text('Save'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       );
                     },
