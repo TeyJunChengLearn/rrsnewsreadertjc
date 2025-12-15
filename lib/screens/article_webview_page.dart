@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../providers/settings_provider.dart';
 import '../providers/rss_provider.dart';
@@ -456,7 +457,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
   // Highlight operation tracking (to cancel stale highlights during rapid navigation)
   int _highlightSequence = 0;
-  int _lastHighlightedLine = -1; // Track last highlighted line to prevent duplicates
 
   Future<bool> _handleBackNavigation() async {
     if (!mounted) return true;
@@ -507,10 +507,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     });
 
     _globalTts.setCancelHandler(() {
-      _TtsState.instance.isPlaying = false;
+      // Don't set isPlaying = false here, as we often call stop() to skip to next line
+      // isPlaying will be managed by the play/stop button handlers
       // Update notification when cancelled
       final s = _TtsState.instance;
-      if (s.lines.isNotEmpty && s.currentLine >= 0 && s.currentLine < s.lines.length) {
+      if (!s.isPlaying && s.lines.isNotEmpty && s.currentLine >= 0 && s.currentLine < s.lines.length) {
         unawaited(_showReadingNotificationGlobal(s.lines[s.currentLine]));
       }
     });
@@ -546,8 +547,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _ttsState.articleId = '';
       _ttsState.articleTitle = '';
       _ttsState.readerModeOn = false; // Reset reader mode for new article
-      // Reset highlight tracking for new article
-      _lastHighlightedLine = -1;
       // Clear the notification
       unawaited(_clearReadingNotification());
     }
@@ -767,14 +766,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final settings = context.read<SettingsProvider>();
     if (!settings.highlightText) return;
 
-    // Skip if already highlighting this exact line (prevents duplicate highlights)
-    if (_lastHighlightedLine == index && _highlightSequence > 0) {
-      return;
-    }
-
     // Increment sequence to cancel any in-progress highlight operations
     _highlightSequence++;
     final currentSequence = _highlightSequence;
+
+    // Allow highlights to proceed even if it's the same line - this ensures
+    // highlighting continues during continuous playback and when switching modes
 
     bool highlightSucceeded = false;
 
@@ -842,11 +839,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
     }
 
-    // Only update _lastHighlightedLine if we actually tried to highlight
-    // (prevents blocking if operation was cancelled early)
-    if (highlightSucceeded && _highlightSequence == currentSequence) {
-      _lastHighlightedLine = index;
-    }
+    // Highlighting complete - sequence tracking will prevent stale operations
   }
 
   Future<void> _highlightInWebPage(String text) async {
@@ -1002,8 +995,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Small delay to let the HTML render
       await Future.delayed(const Duration(milliseconds: 200));
       if (mounted && _readerOn) {
-        // Reset lastHighlightedLine to force re-highlight after HTML reload
-        _lastHighlightedLine = -1;
         await _highlightLine(_currentLine);
       }
     }
@@ -1219,8 +1210,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           _isTranslatedView = false;
           // Keep current line position when reverting translation
           _webHighlightText = null;
-          // Reset highlight tracking since content changed
-          _lastHighlightedLine = -1;
         });
         await _reloadReaderHtml(showLoading: true);
         await _applyTtsLocale('en');
@@ -1280,8 +1269,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _isTranslating = false;
       // Keep current line position when translating
       _webHighlightText = null;
-      // Reset highlight tracking since content changed
-      _lastHighlightedLine = -1;
     });
     await _reloadReaderHtml(showLoading: true);
     await _applyTtsLocale(code);
@@ -1924,8 +1911,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       } else if (_lines.isNotEmpty && !_readerHintDismissed) {
         _readerHintVisible = true;
       }
-      // Reset highlight tracking when switching modes to ensure highlight shows
-      _lastHighlightedLine = -1;
     });
 
     // Save reader mode state globally so it persists when returning to this article
@@ -2022,6 +2007,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
             },
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.share),
+              onPressed: () {
+                final title = widget.title ?? 'Check out this article';
+                final url = widget.url;
+                Share.share('$title\n\n$url', subject: title);
+              },
+              tooltip: 'Share article',
+            ),
             IconButton(
               icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
               onPressed: _toggleReader,

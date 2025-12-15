@@ -128,14 +128,15 @@ bool _looksLikeTeaser(String? text) {
   return false;
 }
 
-/// Detects if a URL is from a known paywalled domain that requires WebView extraction
-/// Returns true for sites like Malaysiakini, NYT, WSJ, etc.
+/// Detects if a URL is from a known paywalled domain or Javascript-heavy site
+/// that requires WebView extraction with delays.
+/// Returns true for sites like Malaysiakini, NYT, WSJ, Harian Metro, etc.
 bool _isPaywalledDomain(String url) {
   try {
     final uri = Uri.parse(url);
     final host = uri.host.toLowerCase();
 
-    // List of known paywalled domains
+    // List of known paywalled domains and Javascript-heavy sites
     const paywalledDomains = [
       'malaysiakini.com',
       'nytimes.com',
@@ -147,6 +148,12 @@ bool _isPaywalledDomain(String url) {
       'medium.com',
       'wired.com',
       'theatlantic.com',
+      'hmetro.com.my',           // Harian Metro - Javascript-heavy
+      'harakahdaily.net',        // Javascript-heavy Malaysian news
+      'sinchew.com.my',          // Sin Chew Daily - Javascript-heavy
+      'orientaldaily.com.my',    // Oriental Daily - Javascript-heavy
+      'thestar.com.my',          // The Star - Some articles paywalled
+      'freemalaysiatoday.com',   // Javascript-heavy
     ];
 
     for (final domain in paywalledDomains) {
