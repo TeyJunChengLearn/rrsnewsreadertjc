@@ -451,6 +451,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   // Auto-advance state
   Timer? _autoAdvanceTimer;
 
+  // Periodic position save timer
+  Timer? _periodicSaveTimer;
+
+  // Periodic highlight sync timer
+  Timer? _periodicHighlightSyncTimer;
+  int _lastSyncedLine = -1;
+
   // Translation state
   bool _isTranslating = false;
   bool _isTranslatedView = false;
@@ -525,6 +532,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   Future<bool> _handleBackNavigation() async {
     if (!mounted) return true;
 
+    // Save reading position before leaving
+    await _saveReadingPosition();
+
     // Allow back navigation without stopping reading
     // TTS will continue in background, controlled via notification
     return true;
@@ -536,7 +546,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     // Only initialize handlers once globally
     if (state.ttsInitialized) {
       // Handlers already initialized, but update speech rate from current settings
-      _applySpeechRateFromSettings();
+      unawaited(_applySpeechRateFromSettings());
       return;
     }
 
@@ -663,7 +673,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // If TTS is already running in the background, immediately show the
       // highlight at the active line when returning to this page.
       if (hasValidLine && _isPlaying) {
+        // Initialize sync tracker with current global line
+        _lastSyncedLine = _currentLine;
         await _highlightCurrentLineAfterDelay();
+        // Start syncing highlights with global state during playback
+        _startPeriodicHighlightSync();
       }
 
       // Auto-start playing if requested (e.g., from auto-advance)
@@ -683,17 +697,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _settingsListener = () {
         // When settings change, apply immediately
         if (mounted) {
-          _applySpeechRateFromSettings();
+          unawaited(_applySpeechRateFromSettings());
         }
       };
       // Apply initial speech rate from settings
-      _applySpeechRateFromSettings();
+      unawaited(_applySpeechRateFromSettings());
       // Add listener for future changes
       _settings?.addListener(_settingsListener!);
     });
   }
 
-  void _applySpeechRateFromSettings() {
+  Future<void> _applySpeechRateFromSettings({bool restartIfPlaying = true}) async {
     if (!mounted) return;
     try {
       final settings = _settings ?? context.read<SettingsProvider>();
@@ -702,19 +716,23 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       // Always apply the speech rate to the global TTS instance
       // This ensures the rate persists even when widget is disposed
-      _globalTts.setSpeechRate(rate);
+      await _globalTts.setSpeechRate(rate);
 
-      // If currently playing, restart playback to apply the new rate immediately
+      // If currently playing and restartIfPlaying is true, restart playback to apply the new rate immediately
       // FlutterTTS speech rate changes only apply to NEW utterances on most platforms
-      if (_isPlaying) {
-        _globalTts.stop();
-        _speakCurrentLine();
+      if (restartIfPlaying && _isPlaying && mounted) {
+        await _globalTts.stop();
+        // Use a small delay to ensure stop() completes before restarting
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (mounted && _isPlaying) {
+          await _speakCurrentLine();
+        }
       }
     } catch (e) {
       // Context might not be available yet, try again later
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          _applySpeechRateFromSettings();
+          unawaited(_applySpeechRateFromSettings(restartIfPlaying: restartIfPlaying));
         }
       });
     }
@@ -1519,17 +1537,29 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         ? savedPosition
         : 0;
 
+    // Check if we're returning to an article that's currently playing
+    final isSameArticle = _ttsState.articleId == (widget.articleId ?? '');
+    final isCurrentlyPlaying = _isPlaying && isSameArticle;
+
     setState(() {
       _paywallLikely = looksPaywalled;
       _lines
         ..clear()
         ..addAll(combined);
-      _currentLine = restoredLine;
+      // Only restore saved position if not currently playing
+      // If playing, keep the global current line
+      if (!isCurrentlyPlaying) {
+        _currentLine = restoredLine;
+      }
+      // If playing, sync global lines with loaded lines
+      if (isCurrentlyPlaying) {
+        _ttsState.lines = _lines;
+      }
       _readerHintVisible = !_readerOn && !_readerHintDismissed;
     });
 
-    // Show visual feedback if position was restored
-    if (savedPosition != null && savedPosition > 0 && savedPosition < combined.length && mounted) {
+    // Show visual feedback if position was restored (but not if currently playing)
+    if (!isCurrentlyPlaying && savedPosition != null && savedPosition > 0 && savedPosition < combined.length && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Resuming from line ${savedPosition + 1}/${combined.length}'),
@@ -1685,13 +1715,19 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Stop any currently playing TTS first (before setting state)
     await _globalTts.stop();
-    _applySpeechRateFromSettings();
+    // Apply speech rate but don't restart (we're about to speak anyway)
+    await _applySpeechRateFromSettings(restartIfPlaying: false);
 
     // Now set playing state and start speaking
     setState(() {
       _isPlaying = true;
       _webHighlightText = null;
     });
+    // Start periodic position saving during playback
+    _startPeriodicSave();
+    // Start periodic highlight syncing to catch global state changes
+    _startPeriodicHighlightSync();
+    _lastSyncedLine = _currentLine;
     await _showReadingNotification(text);
     await _globalTts.speak(text);
   }
@@ -1784,6 +1820,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
   Future<void> _stopSpeaking() async {
     _cancelAutoAdvanceTimer();
+    _cancelPeriodicSave();
+    _cancelPeriodicHighlightSync();
     await _globalTts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
@@ -1824,6 +1862,50 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   void _cancelAutoAdvanceTimer() {
     _autoAdvanceTimer?.cancel();
     _autoAdvanceTimer = null;
+  }
+
+  void _startPeriodicSave() {
+    _cancelPeriodicSave();
+    // Save position every 3 seconds during playback
+    _periodicSaveTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted || _disposed) {
+        _cancelPeriodicSave();
+        return;
+      }
+      unawaited(_saveReadingPosition());
+    });
+  }
+
+  void _cancelPeriodicSave() {
+    _periodicSaveTimer?.cancel();
+    _periodicSaveTimer = null;
+  }
+
+  void _startPeriodicHighlightSync() {
+    _cancelPeriodicHighlightSync();
+    // Sync highlight every 500ms during playback to catch global state changes
+    _periodicHighlightSyncTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted || _disposed) {
+        _cancelPeriodicHighlightSync();
+        return;
+      }
+      // Only sync if widget is active and playback is happening
+      if (_isPlaying && _lines.isNotEmpty) {
+        // Check if the global current line has changed from what we last synced
+        if (_currentLine != _lastSyncedLine) {
+          _lastSyncedLine = _currentLine;
+          // Update highlight to match global state
+          if (_currentLine >= 0 && _currentLine < _lines.length) {
+            unawaited(_highlightLine(_currentLine));
+          }
+        }
+      }
+    });
+  }
+
+  void _cancelPeriodicHighlightSync() {
+    _periodicHighlightSyncTimer?.cancel();
+    _periodicHighlightSyncTimer = null;
   }
 
   bool _hasNextArticle() {
@@ -2097,6 +2179,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     _cancelAutoAdvanceTimer();
+    _cancelPeriodicSave();
+    _cancelPeriodicHighlightSync();
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
