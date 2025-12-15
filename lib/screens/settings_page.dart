@@ -285,9 +285,16 @@ class SettingsPage extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 8),
                                 ElevatedButton(
-                                  onPressed: () {
-                                    _tryCall(d, () => d.setTtsSpeechRate(temp));
-                                    Navigator.of(context).pop();
+                                  onPressed: () async {
+                                    // Properly await the async call
+                                    try {
+                                      await d.setTtsSpeechRate(temp);
+                                    } catch (e) {
+                                      // Silently handle error
+                                    }
+                                    if (context.mounted) {
+                                      Navigator.of(context).pop();
+                                    }
                                   },
                                   child: const Text('Save'),
                                 ),

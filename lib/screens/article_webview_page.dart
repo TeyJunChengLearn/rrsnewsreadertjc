@@ -267,6 +267,9 @@ class _TtsState {
   // Callback for widget-specific actions (set by current widget instance)
   void Function(String actionId)? widgetActionHandler;
 
+  // Callback for widget-specific completion handling (highlighting, etc.)
+  Future<void> Function()? widgetCompletionHandler;
+
   static final _TtsState instance = _TtsState._internal();
   _TtsState._internal();
 }
@@ -352,6 +355,8 @@ Future<void> _speakCurrentLineGlobal() async {
   state.isPlaying = true;
   await _showReadingNotificationGlobal(text);
   await _globalTts.stop();
+  // Speech rate should already be set by the widget, but ensure it's set
+  // (The rate persists in _globalTts once set, so this is just a safety check)
   await _globalTts.speak(text);
 }
 
@@ -464,13 +469,57 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       return;
     }
 
+    // Use longer delays to ensure webview is fully loaded when navigating back
     final delay = _readerOn
-        ? const Duration(milliseconds: 200)
-        : const Duration(milliseconds: 800);
+        ? const Duration(milliseconds: 500)
+        : const Duration(milliseconds: 1200);
 
     await Future.delayed(delay);
     if (!mounted) return;
-    await _highlightLine(_currentLine);
+
+    // Use immediate highlighting mode (pass force parameter)
+    await _highlightLineImmediate(_currentLine);
+  }
+
+  /// Highlight line immediately without checking _isPlaying state
+  /// Used when returning to the article from navigation
+  Future<void> _highlightLineImmediate(int index) async {
+    if (!mounted) return;
+
+    final settings = context.read<SettingsProvider>();
+    if (!settings.highlightText) return;
+
+    _highlightSequence++;
+
+    if (_readerOn) {
+      if (_webHighlightText != null) {
+        setState(() => _webHighlightText = null);
+      }
+
+      // Immediate highlight without retries
+      try {
+        await _controller.runJavaScript(
+          'window.flutterHighlightLine && window.flutterHighlightLine($index);',
+        );
+      } catch (e) {
+        // Silently continue
+      }
+    } else {
+      // Web mode highlighting
+      if (index < 0 || index >= _lines.length) return;
+      final text = _lines[index].trim();
+      if (text.isEmpty) return;
+
+      if (mounted) {
+        setState(() => _webHighlightText = text);
+      }
+
+      try {
+        await _highlightInWebPage(text);
+      } catch (e) {
+        // Silently continue
+      }
+    }
   }
 
   Future<bool> _handleBackNavigation() async {
@@ -485,8 +534,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final state = _TtsState.instance;
 
     // Only initialize handlers once globally
-    if (state.ttsInitialized) return;
+    if (state.ttsInitialized) {
+      // Handlers already initialized, but update speech rate from current settings
+      _applySpeechRateFromSettings();
+      return;
+    }
 
+    // Set default values (will be overridden by settings)
     _globalTts.setSpeechRate(0.5);
     _globalTts.setPitch(1.0);
 
@@ -512,13 +566,19 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         }
         return;
       }
-      // If widget is still mounted, use instance method to update highlight
-      // Otherwise use global function for background playback
-      if (mounted && !_disposed) {
-        await _speakNextLine(auto: true);
-      } else {
-        await _speakNextLineGlobal(auto: true);
+
+      // Try to use widget-specific completion handler first (includes highlighting)
+      if (s.widgetCompletionHandler != null) {
+        try {
+          await s.widgetCompletionHandler!();
+          return;
+        } catch (_) {
+          // Widget handler failed, fall back to global handler
+        }
       }
+
+      // Fallback: global handler for background playback (no highlighting)
+      await _speakNextLineGlobal(auto: true);
     });
 
     _globalTts.setCancelHandler(() {
@@ -545,6 +605,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Register this widget's notification action handler
     _ttsState.widgetActionHandler = _handleWidgetNotificationAction;
+
+    // Register this widget's completion handler (for highlighting during continuous playback)
+    _ttsState.widgetCompletionHandler = _handleWidgetCompletion;
 
     // Check if opening a different article - if so, stop TTS and clear state
     final currentArticleId = widget.articleId ?? '';
@@ -613,22 +676,45 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     });
   }
  void _attachSettingsListener() {
+    // Apply speech rate immediately on init (synchronously)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _settings = context.read<SettingsProvider>();
       _settingsListener = () {
-        _applySpeechRateFromSettings();
+        // When settings change, apply immediately
+        if (mounted) {
+          _applySpeechRateFromSettings();
+        }
       };
+      // Apply initial speech rate from settings
       _applySpeechRateFromSettings();
+      // Add listener for future changes
       _settings?.addListener(_settingsListener!);
     });
   }
 
   void _applySpeechRateFromSettings() {
-    final settings = _settings ?? context.read<SettingsProvider>();
-    _settings ??= settings;
-    final rate = settings.ttsSpeechRate;
-    _globalTts.setSpeechRate(rate);
+    if (!mounted) return;
+    try {
+      final settings = _settings ?? context.read<SettingsProvider>();
+      _settings ??= settings;
+      final rate = settings.ttsSpeechRate;
+
+      // Always apply the speech rate to the global TTS instance
+      // This ensures the rate persists even when widget is disposed
+      _globalTts.setSpeechRate(rate);
+
+      // Note: FlutterTTS speech rate changes may only apply to NEW utterances
+      // The current utterance may continue at the old rate on some platforms
+      // To force immediate change, we would need to stop and restart playback
+    } catch (e) {
+      // Context might not be available yet, try again later
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _applySpeechRateFromSettings();
+        }
+      });
+    }
   }
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
   /// Choose a concrete voice for the BCP language code (e.g., 'zh-CN')
@@ -744,6 +830,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
+  Future<void> _handleWidgetCompletion() async {
+    // Widget-specific completion handler (called from global TTS completion handler)
+    // This enables highlighting during continuous playback even after navigation
+    if (!mounted || _disposed) return;
+
+    // Call the instance method which includes highlighting
+    await _speakNextLine(auto: true);
+  }
+
   Future<void> _loadReaderContent() async {
     final shouldShowLoading = _lines.isEmpty;
     if (shouldShowLoading) {
@@ -786,51 +881,52 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _highlightSequence++;
     final currentSequence = _highlightSequence;
 
-    // Allow highlights to proceed even if it's the same line - this ensures
-    // highlighting continues during continuous playback and when switching modes
-
-    bool highlightSucceeded = false;
-
     if (_readerOn) {
       // Clear any lingering overlay highlight when we switch to reader mode
       if (_webHighlightText != null) {
         setState(() => _webHighlightText = null);
       }
 
-      // Retry highlighting up to 3 times with delays to ensure page is ready
-      for (int attempt = 0; attempt < 3; attempt++) {
-        // Check if this highlight operation has been superseded
-        if (!mounted || !_readerOn || _highlightSequence != currentSequence) break;
-
+      // During active playback, highlight immediately without retries
+      // This prevents delays from interfering with continuous playback
+      if (_isPlaying) {
+        // Immediate highlight during playback - no retries, no delays
         try {
-          // Small delay to ensure DOM is ready (only on retry)
-          if (attempt > 0) {
-            await Future.delayed(Duration(milliseconds: 100 * attempt));
-            // Check again after delay
-            if (_highlightSequence != currentSequence) break;
-          }
-
-          final result = await _controller.runJavaScriptReturningResult(
+          await _controller.runJavaScript(
             'window.flutterHighlightLine && window.flutterHighlightLine($index);',
           );
-
-          // Check if the JavaScript function returned true (found the element)
-          if (result == true || result.toString() == 'true') {
-            highlightSucceeded = true;
-            break;
-          }
         } catch (e) {
-          // Continue to next attempt on error
-          print('Highlight attempt $attempt failed for line $index: $e');
+          // Silently continue - next line will try again
+        }
+      } else {
+        // When not playing, use retry logic for initial load reliability
+        for (int attempt = 0; attempt < 3; attempt++) {
+          // Check if this highlight operation has been superseded
+          if (!mounted || !_readerOn || _highlightSequence != currentSequence) break;
+
+          try {
+            // Small delay to ensure DOM is ready (only on retry)
+            if (attempt > 0) {
+              await Future.delayed(Duration(milliseconds: 100 * attempt));
+              // Check again after delay
+              if (_highlightSequence != currentSequence) break;
+            }
+
+            final result = await _controller.runJavaScriptReturningResult(
+              'window.flutterHighlightLine && window.flutterHighlightLine($index);',
+            );
+
+            // Check if the JavaScript function returned true (found the element)
+            if (result == true || result.toString() == 'true') {
+              break; // Success - exit retry loop
+            }
+          } catch (e) {
+            // Continue to next attempt on error
+          }
         }
       }
-
-      // If all retries failed, still mark as succeeded to allow future highlights
-      if (!highlightSucceeded && mounted && _readerOn) {
-        print('Warning: All highlight attempts failed for reader mode line $index');
-        highlightSucceeded = true; // Don't block future attempts
-      }
     } else {
+      // Web mode highlighting with overlay
       if (index < 0 || index >= _lines.length) return;
       final text = _lines[index].trim();
       if (text.isEmpty) return;
@@ -839,23 +935,26 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         setState(() => _webHighlightText = text);
       }
 
-      // Add small delay to ensure page is ready
-      await Future.delayed(const Duration(milliseconds: 100));
-      // Check if this operation has been superseded
-      if (mounted && !_readerOn && _highlightSequence == currentSequence) {
+      // During active playback, highlight immediately without delay
+      if (_isPlaying) {
         try {
           await _highlightInWebPage(text);
-          highlightSucceeded = true;
         } catch (e) {
-          print('Webview highlight failed for line $index: $e');
-          highlightSucceeded = true; // Don't block future attempts
+          // Silently continue - next line will try again
         }
       } else {
-        highlightSucceeded = true; // Was superseded, but don't block
+        // When not playing, add delay for page load
+        await Future.delayed(const Duration(milliseconds: 100));
+        // Check if this operation has been superseded
+        if (mounted && !_readerOn && _highlightSequence == currentSequence) {
+          try {
+            await _highlightInWebPage(text);
+          } catch (e) {
+            // Silently continue
+          }
+        }
       }
     }
-
-    // Highlighting complete - sequence tracking will prevent stale operations
   }
 
   Future<void> _highlightInWebPage(String text) async {
@@ -1971,9 +2070,16 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
           if (_isPlaying) {
             unawaited(_showReadingNotification(_lines[_currentLine]));
+            // If playing, use normal highlight (immediate mode)
+            unawaited(_highlightLine(_currentLine));
+          } else {
+            // If not playing, use delayed immediate highlight to ensure page is ready
+            Future.delayed(const Duration(milliseconds: 500)).then((_) {
+              if (mounted) {
+                unawaited(_highlightLineImmediate(_currentLine));
+              }
+            });
           }
-          // Show highlight at current position
-          unawaited(_highlightLine(_currentLine));
         }
         break;
       case AppLifecycleState.inactive:
@@ -1991,14 +2097,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
-    // Unregister widget-specific notification handler
-    // The global handler will take over for background playback
+    // Unregister widget-specific handlers
+    // The global handlers will take over for background playback
     if (_ttsState.widgetActionHandler == _handleWidgetNotificationAction) {
       _ttsState.widgetActionHandler = null;
     }
+    if (_ttsState.widgetCompletionHandler == _handleWidgetCompletion) {
+      _ttsState.widgetCompletionHandler = null;
+    }
     // TTS continues playing in background via global instance
     // Notification buttons remain functional via global handler
-    // Auto-advance is stopped (handled in completion handler checking _disposed)
+    // Highlighting will stop but audio continues
     unawaited(_saveReadingPosition());
     super.dispose();
   }
