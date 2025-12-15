@@ -65,7 +65,8 @@ class SettingsPage extends StatelessWidget {
           () => d.targetLangCode,
         ]) ??
         'off';
-  final ttsSpeechRate = _firstDouble([
+
+    final ttsSpeechRate = _firstDouble([
           () => d.ttsSpeechRate,
           () => d.speechRate,
           () => d.voiceSpeed,
@@ -262,11 +263,11 @@ class SettingsPage extends StatelessWidget {
                               min: 0.3,
                               max: 1.2,
                               divisions: 9,
-                              value: temp.clamp(0.3, 1.2),
+                              value: temp.clamp(0.3, 1.2).toDouble(),
                               label: '${temp.toStringAsFixed(2)}x',
                               onChanged: (v) {
                                 setSheetState(() {
-                                  temp = double.parse(v.toStringAsFixed(2));
+                                  temp = v.clamp(0.3, 1.2).toDouble();
                                 });
                               },
                             ),
