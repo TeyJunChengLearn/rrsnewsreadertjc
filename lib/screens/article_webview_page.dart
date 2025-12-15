@@ -458,6 +458,21 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   // Highlight operation tracking (to cancel stale highlights during rapid navigation)
   int _highlightSequence = 0;
 
+  Future<void> _highlightCurrentLineAfterDelay() async {
+    if (!mounted) return;
+    if (_lines.isEmpty || _currentLine < 0 || _currentLine >= _lines.length) {
+      return;
+    }
+
+    final delay = _readerOn
+        ? const Duration(milliseconds: 200)
+        : const Duration(milliseconds: 800);
+
+    await Future.delayed(delay);
+    if (!mounted) return;
+    await _highlightLine(_currentLine);
+  }
+
   Future<bool> _handleBackNavigation() async {
     if (!mounted) return true;
 
@@ -579,20 +594,21 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
 
       await _ensureLinesLoaded();
+      final hasValidLine =
+          _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length;
+
+      // If TTS is already running in the background, immediately show the
+      // highlight at the active line when returning to this page.
+      if (hasValidLine && _isPlaying) {
+        await _highlightCurrentLineAfterDelay();
+      }
+
       // Auto-start playing if requested (e.g., from auto-advance)
-      if (widget.autoPlay && _lines.isNotEmpty) {
+      if (widget.autoPlay && hasValidLine) {
         await _speakCurrentLine();
-      } else if (_lines.isNotEmpty && !_isPlaying) {
+      } else if (hasValidLine && !_isPlaying) {
         // If returning to a saved position (or starting fresh), show highlight
-        // In reader mode, show immediately after HTML loads
-        // In web mode, add delay to ensure page is ready
-        final delay = _readerOn
-            ? const Duration(milliseconds: 200)
-            : const Duration(milliseconds: 800);
-        await Future.delayed(delay);
-        if (mounted && !_isPlaying) {
-          await _highlightLine(_currentLine);
-        }
+        await _highlightCurrentLineAfterDelay();
       }
     });
   }
