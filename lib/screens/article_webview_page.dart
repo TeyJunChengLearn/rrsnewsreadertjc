@@ -1541,6 +1541,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final isSameArticle = _ttsState.articleId == (widget.articleId ?? '');
     final isCurrentlyPlaying = _isPlaying && isSameArticle;
 
+    // Prefer the last known global line when returning to the same article,
+    // even if playback is currently paused. This keeps the UI in sync with
+    // background TTS progress when navigating away and back.
+    final globalLine = (isSameArticle && _ttsState.currentLine < combined.length)
+        ? _ttsState.currentLine
+        : null;
+
     setState(() {
       _paywallLikely = looksPaywalled;
       _lines
@@ -1549,7 +1556,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Only restore saved position if not currently playing
       // If playing, keep the global current line
       if (!isCurrentlyPlaying) {
-        _currentLine = restoredLine;
+        _currentLine = globalLine ?? restoredLine;
       }
       // If playing, sync global lines with loaded lines
       if (isCurrentlyPlaying) {
