@@ -280,22 +280,48 @@ class MainActivity : FlutterActivity() {
 
                             val allCookies = mutableMapOf<String, Map<String, String>>()
 
-                            for (domain in domains) {
-                                val url = if (domain.startsWith("http")) domain else "https://$domain"
-                                val cookieString = cookieManager.getCookie(url)
+                            android.util.Log.d("CookieBridge", "exportAllCookies: Starting export for ${domains.size} domains")
 
-                                if (!cookieString.isNullOrEmpty()) {
-                                    val cookieMap = parseCookieString(cookieString)
-                                    if (cookieMap.isNotEmpty()) {
-                                        allCookies[domain] = cookieMap
+                            for (domain in domains) {
+                                // Try multiple URL variations to get all cookies
+                                val baseDomain = domain.removePrefix("www.")
+                                val urls = mutableListOf<String>()
+
+                                if (domain.startsWith("http")) {
+                                    urls.add(domain)
+                                } else {
+                                    urls.add("https://$domain")
+                                    urls.add("https://www.$baseDomain")
+                                    urls.add("http://$domain")
+                                    urls.add("http://www.$baseDomain")
+                                }
+
+                                val mergedCookies = mutableMapOf<String, String>()
+
+                                for (url in urls) {
+                                    val cookieString = cookieManager.getCookie(url)
+                                    if (!cookieString.isNullOrEmpty()) {
+                                        val cookieMap = parseCookieString(cookieString)
+                                        mergedCookies.putAll(cookieMap)  // Merge cookies from all URL variations
                                     }
+                                }
+
+                                if (mergedCookies.isNotEmpty()) {
+                                    allCookies[domain] = mergedCookies
+                                    android.util.Log.d("CookieBridge", "  ✓ $domain: ${mergedCookies.size} cookies")
+                                    mergedCookies.forEach { (name, value) ->
+                                        android.util.Log.d("CookieBridge", "    - $name = ${value.take(20)}${if (value.length > 20) "..." else ""}")
+                                    }
+                                } else {
+                                    android.util.Log.d("CookieBridge", "  ⚠ $domain: No cookies found")
                                 }
                             }
 
-                            android.util.Log.d("CookieBridge", "exportAllCookies: Exported cookies for ${allCookies.size} domains")
+                            android.util.Log.d("CookieBridge", "exportAllCookies: ✓ Exported cookies for ${allCookies.size} of ${domains.size} domains")
                             result.success(allCookies)
                         } catch (e: Exception) {
                             android.util.Log.e("CookieBridge", "Error exporting cookies: ${e.message}")
+                            e.printStackTrace()
                             result.success(emptyMap<String, Map<String, String>>())
                         }
                     }
@@ -312,21 +338,68 @@ class MainActivity : FlutterActivity() {
                             cookieManager.setAcceptCookie(true)
 
                             var successCount = 0
+                            var pendingCallbacks = 0
+                            val totalCookies = cookies.values.sumOf { it.size }
+
+                            android.util.Log.d("CookieBridge", "importCookies: Starting import of $totalCookies cookies for ${cookies.size} domains")
+
                             for ((domain, domainCookies) in cookies) {
-                                val url = if (domain.startsWith("http")) domain else "https://$domain"
+                                // Prepare URLs - try both with and without www
+                                val baseDomain = domain.removePrefix("www.")
+                                val urls = mutableListOf<String>()
+
+                                if (domain.startsWith("http")) {
+                                    urls.add(domain)
+                                } else {
+                                    urls.add("https://$domain")
+                                    urls.add("https://www.$baseDomain")
+                                    urls.add("http://$domain")
+                                    urls.add("http://www.$baseDomain")
+                                }
+
+                                android.util.Log.d("CookieBridge", "  Setting cookies for domain: $domain (${domainCookies.size} cookies)")
 
                                 for ((name, value) in domainCookies) {
-                                    val cookieString = "$name=$value; domain=$domain; path=/"
-                                    cookieManager.setCookie(url, cookieString)
-                                    successCount++
+                                    // Try with domain prefix (standard for cross-subdomain cookies)
+                                    val domainWithDot = if (baseDomain.startsWith(".")) baseDomain else ".$baseDomain"
+
+                                    for (url in urls) {
+                                        // Set cookie with domain attribute for broader scope
+                                        val cookieString = "$name=$value; domain=$domainWithDot; path=/; max-age=31536000"
+                                        cookieManager.setCookie(url, cookieString)
+
+                                        // Also set without domain attribute for exact match
+                                        val cookieStringExact = "$name=$value; path=/; max-age=31536000"
+                                        cookieManager.setCookie(url, cookieStringExact)
+
+                                        successCount++
+                                    }
+
+                                    android.util.Log.d("CookieBridge", "    ✓ $name = ${value.take(20)}${if (value.length > 20) "..." else ""}")
                                 }
                             }
 
+                            // Flush and wait a bit for cookies to persist
                             cookieManager.flush()
-                            android.util.Log.d("CookieBridge", "importCookies: Imported $successCount cookies for ${cookies.size} domains")
+                            Thread.sleep(500) // Give time for cookies to persist
+
+                            android.util.Log.d("CookieBridge", "importCookies: ✓ Successfully imported $successCount cookie entries for ${cookies.size} domains")
+
+                            // Verify cookies were set
+                            for ((domain, domainCookies) in cookies) {
+                                val url = if (domain.startsWith("http")) domain else "https://$domain"
+                                val verifyString = cookieManager.getCookie(url)
+                                if (!verifyString.isNullOrEmpty()) {
+                                    android.util.Log.d("CookieBridge", "  ✓ Verified $domain: ${verifyString.take(100)}${if (verifyString.length > 100) "..." else ""}")
+                                } else {
+                                    android.util.Log.w("CookieBridge", "  ⚠ Warning: No cookies found for $domain after import!")
+                                }
+                            }
+
                             result.success(true)
                         } catch (e: Exception) {
                             android.util.Log.e("CookieBridge", "Error importing cookies: ${e.message}")
+                            e.printStackTrace()
                             result.success(false)
                         }
                     }

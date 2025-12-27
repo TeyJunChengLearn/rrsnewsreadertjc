@@ -413,15 +413,15 @@ class SettingsPage extends StatelessWidget {
 
           ListTile(
             leading: const Icon(Icons.save_alt),
-            title: const Text('Export Backup'),
-            subtitle: const Text('Save backup file (can save to Google Drive folder)'),
+            title: const Text('Export Backup (OPML)'),
+            subtitle: const Text('Save backup as OPML file (can save to Google Drive folder)'),
             onTap: () => _handleExportBackup(context),
           ),
 
           ListTile(
             leading: const Icon(Icons.upload_file),
-            title: const Text('Import Backup'),
-            subtitle: const Text('Restore from a backup file'),
+            title: const Text('Import Backup (OPML)'),
+            subtitle: const Text('Restore from an OPML backup file'),
             onTap: () => _handleImportBackup(context),
           ),
         ],
@@ -510,41 +510,11 @@ class SettingsPage extends StatelessWidget {
   Future<void> _handleExportBackup(BuildContext context) async {
     final service = LocalBackupService();
 
-    // Ask user which format
-    final format = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Choose Backup Format'),
-        content: const Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Select backup file format:'),
-            SizedBox(height: 12),
-            Text('• OPML: Standard RSS format, compatible with other readers'),
-            Text('• JSON: Compact format'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'opml'),
-            child: const Text('OPML (Recommended)'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'json'),
-            child: const Text('JSON'),
-          ),
-        ],
-      ),
-    );
-
-    if (format == null) return;
-
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => const AlertDialog(
-        title: Text('Creating Backup'),
+        title: Text('Creating OPML Backup'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -557,9 +527,7 @@ class SettingsPage extends StatelessWidget {
     );
 
     try {
-      final filePath = format == 'opml'
-        ? await service.exportOpml()
-        : await service.exportBackup();
+      final filePath = await service.exportOpml();
 
       if (context.mounted) Navigator.of(context).pop();
 
@@ -645,36 +613,6 @@ class SettingsPage extends StatelessWidget {
     final service = LocalBackupService();
 
     try {
-      // Ask which format to import
-      final format = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Choose Import Format'),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Select backup file type:'),
-              SizedBox(height: 12),
-              Text('• OPML: Standard RSS format (.opml, .xml)'),
-              Text('• JSON: Compact format (.json)'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'opml'),
-              child: const Text('OPML'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'json'),
-              child: const Text('JSON'),
-            ),
-          ],
-        ),
-      );
-
-      if (format == null) return;
-
       // Ask merge or replace
       final mode = await showDialog<String>(
         context: context,
@@ -711,13 +649,13 @@ class SettingsPage extends StatelessWidget {
           context: context,
           barrierDismissible: false,
           builder: (ctx) => const AlertDialog(
-            title: Text('Restoring Backup'),
+            title: Text('Restoring OPML Backup'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 CircularProgressIndicator(),
                 SizedBox(height: 16),
-                Text('Select backup file from device or Google Drive...'),
+                Text('Select OPML backup file from device or Google Drive...'),
               ],
             ),
           ),
@@ -725,9 +663,7 @@ class SettingsPage extends StatelessWidget {
       }
 
       // File picker will show here (can browse Google Drive folder)
-      final success = format == 'opml'
-        ? await service.importOpml(merge: mode == 'merge')
-        : await service.importBackup(merge: mode == 'merge');
+      final success = await service.importOpml(merge: mode == 'merge');
 
       if (context.mounted) Navigator.of(context).pop();
 

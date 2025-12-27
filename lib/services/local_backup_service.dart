@@ -362,7 +362,15 @@ class LocalBackupService {
           return fs.url;
         }
       }).toSet().toList();
+
+      debugPrint('LocalBackupService: Exporting cookies for ${domains.length} domains');
       final cookies = await _cookieBridge.exportAllCookies(domains);
+      debugPrint('LocalBackupService: Exported ${cookies.length} domains with cookies');
+
+      // Log cookie details for verification
+      cookies.forEach((domain, domainCookies) {
+        debugPrint('  $domain: ${domainCookies.length} cookies');
+      });
 
       // Build OPML XML
       final builder = XmlBuilder();
@@ -437,7 +445,7 @@ class LocalBackupService {
 
       // Generate filename
       final timestamp = DateTime.now().toUtc();
-      final defaultFilename = 'rss_reader_backup_${timestamp.toString().replaceAll(RegExp(r'[:\s.-]'), '').substring(0, 14)}.opml';
+      final defaultFilename = 'rss_reader_backup_${timestamp.toString().replaceAll(RegExp(r'[:\s.-]'), '').substring(0, 14)}.opml.xml';
 
       // Save with file picker
       final outputPath = await FilePicker.platform.saveFile(
@@ -466,9 +474,10 @@ class LocalBackupService {
       debugPrint('LocalBackupService: Starting OPML import...');
 
       // Let user pick OPML file
+      // Use FileType.any to allow files regardless of MIME type metadata
+      // This allows importing both app-generated files and files from other sources
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['opml', 'xml'],
+        type: FileType.any,
         allowMultiple: false,
         withData: true,
       );
@@ -558,11 +567,22 @@ class LocalBackupService {
             final cookiesMap = cookies.map((key, value) =>
               MapEntry(key, Map<String, String>.from(value as Map))
             );
-            await _cookieBridge.importCookies(cookiesMap);
+
+            debugPrint('LocalBackupService: Found cookies for ${cookiesMap.length} domains');
+
+            // Log cookie details for verification
+            cookiesMap.forEach((domain, domainCookies) {
+              debugPrint('  $domain: ${domainCookies.length} cookies');
+            });
+
+            final success = await _cookieBridge.importCookies(cookiesMap);
+            debugPrint('LocalBackupService: Cookie import ${success ? "succeeded" : "failed"}');
           }
         } catch (e) {
           debugPrint('LocalBackupService: Error importing cookies: $e');
         }
+      } else {
+        debugPrint('LocalBackupService: No cookies element found in OPML (standard OPML from other apps)');
       }
 
       // Import feeds - find ALL outline elements recursively (standard OPML support)

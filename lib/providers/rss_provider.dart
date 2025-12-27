@@ -266,19 +266,54 @@ bool _backfillInProgress = false;
     if (_backfillInProgress) return;
     _backfillInProgress = true;
     try {
-      final updates = await repo.populateArticleContent(_items);
-      if (updates.isEmpty) return;
+      debugPrint('RssProvider: Starting background article enrichment for ${_items.length} items (one-by-one updates)');
 
+      int enrichedCount = 0;
+      int processedCount = 0;
+
+      // Process each article individually to update UI progressively
       for (var i = 0; i < _items.length; i++) {
-        final content = updates[_items[i].id];
-        if (content != null) {
-          _items[i] = _items[i].copyWith(
-            mainText: content.mainText ?? _items[i].mainText,
-            imageUrl: content.imageUrl ?? _items[i].imageUrl,
-          );
+        final item = _items[i];
+        processedCount++;
+
+        // Skip if already has content
+        if (item.link.isEmpty) continue;
+        final existingText = (item.mainText ?? '').trim();
+        final hasContent = existingText.isNotEmpty && existingText.length >= 400;
+        final hasImage = (item.imageUrl ?? '').trim().isNotEmpty;
+
+        if (hasContent && hasImage) {
+          // debugPrint('RssProvider: Article $processedCount already has content, skipping');
+          continue;
+        }
+
+        // Enrich this article
+        try {
+          debugPrint('RssProvider: Enriching article $processedCount: ${item.title.substring(0, 50)}...');
+          final content = await repo.populateArticleContent([item]);
+
+          if (content.isNotEmpty && content.containsKey(item.id)) {
+            _items[i] = _items[i].copyWith(
+              mainText: content[item.id]!.mainText ?? _items[i].mainText,
+              imageUrl: content[item.id]!.imageUrl ?? _items[i].imageUrl,
+            );
+            enrichedCount++;
+
+            // Update UI immediately after each article is enriched
+            debugPrint('RssProvider: ✓ Article $enrichedCount enriched - updating UI now!');
+            notifyListeners();
+
+            // Small delay to make the progressive update visible
+            await Future.delayed(const Duration(milliseconds: 150));
+          } else {
+            debugPrint('RssProvider: ⚠ Article $processedCount failed to enrich');
+          }
+        } catch (e) {
+          debugPrint('RssProvider: ✗ Error enriching article $processedCount: $e');
         }
       }
-      notifyListeners();
+
+      debugPrint('RssProvider: ✓ All done! Enriched $enrichedCount of $processedCount articles');
     } finally {
       _backfillInProgress = false;
     }
