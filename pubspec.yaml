@@ -30,6 +30,10 @@ dependencies:
   audio_service: ^0.18.15
   wakelock_plus: ^1.2.8
   rxdart: ^0.28.0
+  google_sign_in: ^6.2.1
+  googleapis: ^13.2.0
+  googleapis_auth: ^1.6.0
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:

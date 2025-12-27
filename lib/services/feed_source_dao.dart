@@ -33,6 +33,16 @@ class FeedSourceDao {
     );
   }
 
+  Future<void> updateTitle(int id, String newTitle) async {
+    final Database db = await _dbService.database;
+    await db.update(
+      'feed_sources',
+      {'title': newTitle},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   /// Optional: find by URL (to avoid duplicates in UI)
   Future<FeedSource?> findByUrl(String url) async {
     final db = await _dbService.database;

@@ -4,7 +4,10 @@
       "Bash(flutter test:*)",
       "Bash(flutter analyze:*)",
       "mcp__ide__getDiagnostics",
-      "Bash(flutter build:*)"
+      "Bash(flutter build:*)",
+      "Bash(git log:*)",
+      "Bash(flutter pub get:*)",
+      "Bash(./gradlew signingReport:*)"
     ],
     "deny": [],
     "ask": []

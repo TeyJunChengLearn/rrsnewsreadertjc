@@ -267,6 +267,70 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    "exportAllCookies" -> {
+                        val domains = call.argument<List<String>>("domains")
+                        if (domains == null) {
+                            result.success(emptyMap<String, Map<String, String>>())
+                            return@setMethodCallHandler
+                        }
+
+                        try {
+                            val cookieManager = CookieManager.getInstance()
+                            cookieManager.flush()
+
+                            val allCookies = mutableMapOf<String, Map<String, String>>()
+
+                            for (domain in domains) {
+                                val url = if (domain.startsWith("http")) domain else "https://$domain"
+                                val cookieString = cookieManager.getCookie(url)
+
+                                if (!cookieString.isNullOrEmpty()) {
+                                    val cookieMap = parseCookieString(cookieString)
+                                    if (cookieMap.isNotEmpty()) {
+                                        allCookies[domain] = cookieMap
+                                    }
+                                }
+                            }
+
+                            android.util.Log.d("CookieBridge", "exportAllCookies: Exported cookies for ${allCookies.size} domains")
+                            result.success(allCookies)
+                        } catch (e: Exception) {
+                            android.util.Log.e("CookieBridge", "Error exporting cookies: ${e.message}")
+                            result.success(emptyMap<String, Map<String, String>>())
+                        }
+                    }
+
+                    "importCookies" -> {
+                        val cookies = call.argument<Map<String, Map<String, String>>>("cookies")
+                        if (cookies == null) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+
+                        try {
+                            val cookieManager = CookieManager.getInstance()
+                            cookieManager.setAcceptCookie(true)
+
+                            var successCount = 0
+                            for ((domain, domainCookies) in cookies) {
+                                val url = if (domain.startsWith("http")) domain else "https://$domain"
+
+                                for ((name, value) in domainCookies) {
+                                    val cookieString = "$name=$value; domain=$domain; path=/"
+                                    cookieManager.setCookie(url, cookieString)
+                                    successCount++
+                                }
+                            }
+
+                            cookieManager.flush()
+                            android.util.Log.d("CookieBridge", "importCookies: Imported $successCount cookies for ${cookies.size} domains")
+                            result.success(true)
+                        } catch (e: Exception) {
+                            android.util.Log.e("CookieBridge", "Error importing cookies: ${e.message}")
+                            result.success(false)
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }
@@ -286,6 +350,20 @@ class MainActivity : FlutterActivity() {
             cookieManager.setCookie(baseUrl, cookie)
             cookieManager.setCookie(url, cookie)
         }
+    }
+
+    private fun parseCookieString(cookieString: String): Map<String, String> {
+        val cookieMap = mutableMapOf<String, String>()
+        cookieString.split(';').forEach { cookie ->
+            val trimmed = cookie.trim()
+            val parts = trimmed.split('=', limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].trim()
+                val value = parts[1].trim()
+                cookieMap[key] = value
+            }
+        }
+        return cookieMap
     }
 
     private fun decodeJavascriptString(raw: String?): String? {

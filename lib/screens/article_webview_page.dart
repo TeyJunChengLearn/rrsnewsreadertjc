@@ -264,6 +264,14 @@ class _TtsState {
   bool ttsInitialized = false;
   bool readerModeOn = false; // Remember reader mode state
 
+  // Article list for continuous reading
+  List<FeedItem> allArticles = [];
+  int currentArticleIndex = -1;
+
+  // Database access for loading next articles
+  ArticleDao? articleDao;
+  RssProvider? rssProvider;
+
   // Callback for widget-specific actions (set by current widget instance)
   void Function(String actionId)? widgetActionHandler;
 
@@ -319,6 +327,73 @@ void _handleGlobalNotificationAction(NotificationResponse response) {
   }
 }
 
+// Global function to load next article content from database
+Future<bool> _loadNextArticleGlobal() async {
+  final state = _TtsState.instance;
+
+  // Check if we have a next article
+  if (state.allArticles.isEmpty || state.currentArticleIndex < 0) return false;
+
+  final nextIndex = state.currentArticleIndex + 1;
+  if (nextIndex >= state.allArticles.length) return false;
+
+  final nextArticle = state.allArticles[nextIndex];
+
+  // Try to load cached content from database
+  if (state.articleDao == null) return false;
+
+  try {
+    final row = await state.articleDao!.findById(nextArticle.id);
+    if (row == null) return false;
+
+    final text = (row.mainText ?? '').trim();
+    if (text.isEmpty) return false;
+
+    // Build lines list: header + content
+    final rawLines = text
+        .split('\n\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    final combined = <String>[];
+    final header = nextArticle.title.trim();
+    if (header.isNotEmpty) {
+      combined.add(header);
+    }
+    combined.addAll(rawLines);
+
+    if (combined.isEmpty) return false;
+
+    // Update global state with next article
+    state.lines = combined;
+    state.currentLine = 0;
+    state.articleId = nextArticle.id;
+    state.articleTitle = nextArticle.title;
+    state.currentArticleIndex = nextIndex;
+
+    // Mark article as read
+    if (state.rssProvider != null) {
+      try {
+        state.rssProvider!.markRead(nextArticle, read: 1);
+      } catch (_) {
+        // Ignore errors
+      }
+    }
+
+    // Save position for new article
+    try {
+      await state.articleDao!.updateReadingPosition(nextArticle.id, 0);
+    } catch (_) {
+      // Ignore errors
+    }
+
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 // Global function to speak next line (works even when widget is disposed)
 Future<void> _speakNextLineGlobal({bool auto = false}) async {
   final state = _TtsState.instance;
@@ -327,10 +402,18 @@ Future<void> _speakNextLineGlobal({bool auto = false}) async {
   final nextLine = state.currentLine + 1;
 
   if (nextLine >= state.lines.length) {
-    // Reached end of article
-    state.isPlaying = false;
-    if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
-      unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+    // Reached end of current article
+    // Try to load and play next article automatically
+    final loaded = await _loadNextArticleGlobal();
+    if (loaded) {
+      // Successfully loaded next article, continue playing
+      await _speakCurrentLineGlobal();
+    } else {
+      // No more articles, stop playing
+      state.isPlaying = false;
+      if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
+        unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+      }
     }
     return;
   }
@@ -364,7 +447,12 @@ Future<void> _speakCurrentLineGlobal() async {
 Future<void> _showReadingNotificationGlobal(String lineText) async {
   final state = _TtsState.instance;
   final title = state.articleTitle.isNotEmpty ? state.articleTitle : 'Reading article';
-  final position = '${state.currentLine + 1}/${state.lines.length}';
+
+  // Show line position and optionally article progress
+  String position = '${state.currentLine + 1}/${state.lines.length}';
+  if (state.allArticles.isNotEmpty && state.currentArticleIndex >= 0) {
+    position += ' • Article ${state.currentArticleIndex + 1}/${state.allArticles.length}';
+  }
 
   final displayText = lineText.length > 100
       ? '${lineText.substring(0, 97)}...'
@@ -618,6 +706,22 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Register this widget's completion handler (for highlighting during continuous playback)
     _ttsState.widgetCompletionHandler = _handleWidgetCompletion;
+
+    // Provide database and provider access to global state for continuous reading
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _ttsState.articleDao = context.read<ArticleDao>();
+      _ttsState.rssProvider = context.read<RssProvider>();
+    });
+
+    // Update global article list and current index for continuous reading
+    _ttsState.allArticles = widget.allArticles;
+    if (widget.articleId != null && widget.allArticles.isNotEmpty) {
+      final index = widget.allArticles.indexWhere((a) => a.id == widget.articleId);
+      if (index >= 0) {
+        _ttsState.currentArticleIndex = index;
+      }
+    }
 
     // Check if opening a different article - if so, stop TTS and clear state
     final currentArticleId = widget.articleId ?? '';
@@ -1720,6 +1824,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _ttsState.articleTitle = widget.title ?? '';
     _ttsState.readerModeOn = _readerOn; // Save reader mode state
 
+    // Sync article list and current index for continuous reading
+    _ttsState.allArticles = widget.allArticles;
+    if (widget.articleId != null && widget.allArticles.isNotEmpty) {
+      final index = widget.allArticles.indexWhere((a) => a.id == widget.articleId);
+      if (index >= 0) {
+        _ttsState.currentArticleIndex = index;
+      }
+    }
+
     // Stop any currently playing TTS first (before setting state)
     await _globalTts.stop();
     // Apply speech rate but don't restart (we're about to speak anyway)
@@ -2043,7 +2156,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   Future<void> _showReadingNotification(String lineText) async {
     final title =
         (widget.title?.isNotEmpty ?? false) ? widget.title! : 'Reading article';
-    final position = '${_currentLine + 1}/${_lines.length}';
+
+    // Show line position and optionally article progress
+    String position = '${_currentLine + 1}/${_lines.length}';
+    if (widget.allArticles.isNotEmpty && widget.articleId != null) {
+      final index = widget.allArticles.indexWhere((a) => a.id == widget.articleId);
+      if (index >= 0) {
+        position += ' • Article ${index + 1}/${widget.allArticles.length}';
+      }
+    }
 
     // Truncate line text if too long for notification
     final displayText = lineText.length > 100

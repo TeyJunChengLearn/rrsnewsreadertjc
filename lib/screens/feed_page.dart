@@ -125,6 +125,16 @@ class _FeedPageState extends State<FeedPage>
     return null;
   }
 
+  /// Show a dialog to edit the feed title.
+  /// Returns the new title if the user confirms, or null if cancelled.
+  Future<String?> _showEditTitleDialog(String currentTitle) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _EditTitleDialog(currentTitle: currentTitle),
+    );
+    return result;
+  }
+
   /// Show a dialog asking whether this feed needs login.
   /// Returns true if user tapped Yes.
   Future<bool> _askRequiresLogin() async {
@@ -329,6 +339,27 @@ class _FeedPageState extends State<FeedPage>
                                 },
                               ),
                               IconButton(
+                                icon: const Icon(Icons.edit),
+                                tooltip: 'Edit feed title',
+                                onPressed: () async {
+                                  if (src.id == null) return;
+
+                                  final newTitle = await _showEditTitleDialog(src.title);
+                                  if (newTitle == null || newTitle == src.title) return;
+
+                                  if (!context.mounted) return;
+                                  final provider = context.read<RssProvider>();
+                                  await provider.updateFeedTitle(src.id!, newTitle);
+
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Renamed to "$newTitle"'),
+                                    ),
+                                  );
+                                },
+                              ),
+                              IconButton(
                                 icon: const Icon(Icons.delete),
                                 tooltip: 'Remove this feed',
                                 onPressed: () {
@@ -351,6 +382,65 @@ class _FeedPageState extends State<FeedPage>
           ),
         ],
       ),
+    );
+  }
+}
+
+class _EditTitleDialog extends StatefulWidget {
+  final String currentTitle;
+
+  const _EditTitleDialog({required this.currentTitle});
+
+  @override
+  State<_EditTitleDialog> createState() => _EditTitleDialogState();
+}
+
+class _EditTitleDialogState extends State<_EditTitleDialog> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentTitle);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      title: const Text('Edit Feed Title'),
+      content: TextField(
+        controller: _controller,
+        decoration: const InputDecoration(
+          border: OutlineInputBorder(),
+          labelText: 'Feed Title',
+          hintText: 'Enter new title',
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            final newTitle = _controller.text.trim();
+            if (newTitle.isNotEmpty) {
+              Navigator.of(context).pop(newTitle);
+            }
+          },
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

@@ -799,15 +799,41 @@ class _ArticleRow extends StatelessWidget {
             SizedBox(
               width: 90,
               height: 90,
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: accentRing, width: 3),
-                ),
-                padding: const EdgeInsets.all(4),
-                child: ClipOval(
-                  child: thumb,
-                ),
+              child: Stack(
+                children: [
+                  // Existing thumbnail with border
+                  Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: accentRing, width: 3),
+                    ),
+                    padding: const EdgeInsets.all(4),
+                    child: ClipOval(
+                      child: thumb,
+                    ),
+                  ),
+
+                  // NEW: Badge indicator (only show if content extracted)
+                  if (hasMainArticle)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: Colors.green,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(
+                          Icons.check,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],

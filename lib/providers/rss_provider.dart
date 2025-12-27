@@ -205,9 +205,12 @@ _scheduleBackgroundBackfill();
   }
 
   Future<void> deleteSource(FeedSource source) async {
-    if (source.id != null) {
-      await repo.deleteSource(source.id!);
-    }
+    await repo.deleteSource(source);
+    await refresh();
+  }
+
+  Future<void> updateFeedTitle(int id, String newTitle) async {
+    await repo.updateFeedTitle(id, newTitle);
     await refresh();
   }
 

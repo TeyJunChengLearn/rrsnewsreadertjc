@@ -35,8 +35,16 @@ class FeedRepository {
     return await feedSourceDao.insertSource(src);
   }
 
-  Future<void> deleteSource(int id) async {
-    await feedSourceDao.deleteSource(id);
+  Future<void> deleteSource(FeedSource source) async {
+    // Delete all articles from this feed first
+    if (source.id != null) {
+      await articleDao.deleteBySourceTitle(source.title);
+      await feedSourceDao.deleteSource(source.id!);
+    }
+  }
+
+  Future<void> updateFeedTitle(int id, String newTitle) async {
+    await feedSourceDao.updateTitle(id, newTitle);
   }
 
   // ---------------------------------------------------------------------------

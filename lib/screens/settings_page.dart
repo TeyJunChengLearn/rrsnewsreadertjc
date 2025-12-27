@@ -3,7 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/settings_provider.dart';
+import '../providers/rss_provider.dart';
 import 'cookie_diagnostic_page.dart';
+import 'google_drive_test_page.dart';
+import '../services/google_drive_backup_service.dart';
+import '../models/backup_data.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -402,6 +406,47 @@ class SettingsPage extends StatelessWidget {
               );
             },
           ),
+
+          const SizedBox(height: 24),
+          const Divider(height: 32),
+          // ================== BACKUP & RESTORE =================
+          _sectionHeader(context, 'Backup & Restore'),
+
+          ListTile(
+            leading: const Icon(Icons.cloud_upload),
+            title: const Text('Export to Google Drive'),
+            subtitle: const Text('Backup your feeds, settings, and cookies'),
+            onTap: () => _handleExportBackup(context),
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.cloud_download),
+            title: const Text('Import from Google Drive'),
+            subtitle: const Text('Restore from a previous backup'),
+            onTap: () => _handleImportBackup(context),
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.logout),
+            title: const Text('Sign out from Google Drive'),
+            subtitle: const Text('Disconnect Google Drive access'),
+            onTap: () => _handleSignOut(context),
+          ),
+
+          const Divider(height: 24),
+
+          ListTile(
+            leading: const Icon(Icons.bug_report, color: Colors.blue),
+            title: const Text('Test Google Drive Connection'),
+            subtitle: const Text('Diagnose Google Drive issues'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const GoogleDriveTestPage(),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -481,6 +526,367 @@ class SettingsPage extends StatelessWidget {
       _tryCall(d, () => d.setArticleLimitPerFeed(picked));
       _tryCall(d, () => d.setPerFeedLimit(picked));
       _tryCall(d, () => d.setMaxItemsPerFeed(picked));
+    }
+  }
+
+  // ================== BACKUP & RESTORE HANDLERS =================
+  Future<void> _handleExportBackup(BuildContext context) async {
+    final service = GoogleDriveBackupService();
+
+    // Step 1: Sign in to Google
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => const AlertDialog(
+          title: Text('Step 1: Google Sign-In'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Opening Google Sign-In...'),
+              SizedBox(height: 8),
+              Text('Please select your Google account and allow Drive access.',
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    try {
+      final signedIn = await service.signIn();
+
+      if (context.mounted) Navigator.of(context).pop();
+
+      if (!signedIn) {
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Sign-In Failed'),
+              content: const Text(
+                'Google Sign-In was cancelled or failed.\n\n'
+                'Please make sure:\n'
+                '• You selected a Google account\n'
+                '• You granted permission to access Google Drive\n'
+                '• You have a working internet connection'
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+
+      // Step 2: Gather data
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const AlertDialog(
+            title: Text('Step 2: Preparing Backup'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Gathering feeds, settings, and cookies...'),
+              ],
+            ),
+          ),
+        );
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500)); // Let user see the message
+
+      // Step 3: Upload
+      if (context.mounted) {
+        Navigator.of(context).pop();
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const AlertDialog(
+            title: Text('Step 3: Uploading'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Uploading to Google Drive...'),
+              ],
+            ),
+          ),
+        );
+      }
+
+      final fileId = await service.uploadBackup();
+
+      if (context.mounted) Navigator.of(context).pop();
+
+      if (fileId != null) {
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('✓ Success!'),
+              content: const Text('Backup exported successfully to Google Drive!\n\nYou can find it in the "RSS Reader Backups" folder.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Upload Failed'),
+              content: const Text('Failed to upload backup to Google Drive.\n\nPlease check your internet connection and try again.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) Navigator.of(context).pop();
+      if (context.mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Error'),
+            content: Text('Export error:\n\n$e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleImportBackup(BuildContext context) async {
+    final service = GoogleDriveBackupService();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Loading backups...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final backups = await service.listBackups();
+
+      if (context.mounted) Navigator.of(context).pop();
+
+      if (backups.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No backups found in Google Drive'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (context.mounted) {
+        final selectedBackup = await showModalBottomSheet<BackupFile>(
+          context: context,
+          showDragHandle: true,
+          builder: (ctx) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Select a backup to restore',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: backups.length,
+                    itemBuilder: (ctx, idx) {
+                      final backup = backups[idx];
+                      final sizeKB = backup.size != null ? (backup.size! / 1024).toStringAsFixed(1) : '?';
+                      return ListTile(
+                        leading: const Icon(Icons.backup),
+                        title: Text(backup.name),
+                        subtitle: Text('${backup.modifiedTime ?? 'Unknown date'} • $sizeKB KB'),
+                        onTap: () => Navigator.pop(ctx, backup),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+
+        if (selectedBackup == null) return;
+
+        final mode = await showDialog<String>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Restore Mode'),
+            content: const Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('How should we restore this backup?'),
+                SizedBox(height: 12),
+                Text('• Merge: Keep existing data, add new items'),
+                Text('• Replace: Delete all current data first'),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'merge'),
+                child: const Text('Merge (Recommended)'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, 'replace'),
+                child: const Text('Replace', style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+        );
+
+        if (mode == null) return;
+
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => const Center(
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Restoring backup...'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final success = await service.restoreFromBackup(
+          selectedBackup.id,
+          merge: mode == 'merge',
+        );
+
+        if (context.mounted) Navigator.of(context).pop();
+
+        if (success) {
+          if (context.mounted) {
+            final rssProvider = Provider.of<RssProvider>(context, listen: false);
+            await rssProvider.loadInitial();
+
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Backup restored successfully! Refreshing feeds...'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+        } else {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Failed to restore backup. Please try again.'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (context.mounted) Navigator.of(context).pop();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleSignOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out from Google Drive?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final service = GoogleDriveBackupService();
+      await service.signOut();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Signed out from Google Drive'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 }

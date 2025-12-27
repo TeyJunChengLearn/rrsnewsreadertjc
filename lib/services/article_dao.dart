@@ -131,6 +131,16 @@ class ArticleDao {
     return deleted;
   }
 
+  Future<int> deleteBySourceTitle(String sourceTitle) async {
+    final db = await _dbService.database;
+    // Only delete unbookmarked articles; preserve bookmarked ones
+    return db.delete(
+      'articles',
+      where: 'sourceTitle = ? AND COALESCE(isBookmarked, 0) = 0',
+      whereArgs: [sourceTitle],
+    );
+  }
+
   Future<int> hideOlderThan(DateTime cutoff) async {
     final db = await _dbService.database;
     final cutoffMillis = cutoff.millisecondsSinceEpoch;

@@ -136,4 +136,52 @@ class CookieBridge {
 
     return false;
   }
+
+  /// Export all cookies for a list of domains.
+  /// Returns a Map of domain -> Map of cookie name/value pairs.
+  /// Used for backing up authentication state to Google Drive.
+  Future<Map<String, Map<String, String>>> exportAllCookies(List<String> domains) async {
+    try {
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'exportAllCookies',
+        {'domains': domains},
+      );
+
+      if (result == null) return {};
+
+      final cookies = <String, Map<String, String>>{};
+      result.forEach((domain, domainCookies) {
+        if (domain is String && domainCookies is Map) {
+          final cookieMap = <String, String>{};
+          domainCookies.forEach((key, value) {
+            if (key is String && value is String) {
+              cookieMap[key] = value;
+            }
+          });
+          if (cookieMap.isNotEmpty) {
+            cookies[domain] = cookieMap;
+          }
+        }
+      });
+
+      return cookies;
+    } on Exception catch (_) {
+      return {};
+    }
+  }
+
+  /// Import cookies from a backup.
+  /// Takes a Map of domain -> Map of cookie name/value pairs.
+  /// Returns true if successful.
+  Future<bool> importCookies(Map<String, Map<String, String>> cookies) async {
+    try {
+      final success = await _channel.invokeMethod<bool>(
+        'importCookies',
+        {'cookies': cookies},
+      );
+      return success ?? false;
+    } on Exception catch (_) {
+      return false;
+    }
+  }
 }
