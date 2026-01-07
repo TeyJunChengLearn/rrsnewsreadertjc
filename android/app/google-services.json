@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "564706946420",
+    "project_id": "tey-jun-cheng-rss-news-reader",
+    "storage_bucket": "tey-jun-cheng-rss-news-reader.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:564706946420:android:3c12b987aed5c84a36d021",
+        "android_client_info": {
+          "package_name": "com.example.flutter_rss_reader_v2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD6HsRb_w2PykZFzI8O7MEf9pP9wJ7h2ek"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

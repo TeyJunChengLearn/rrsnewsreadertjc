@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import '../models/feed_item.dart';
 import 'article_dao.dart';
 import 'readability_service.dart';
@@ -108,8 +109,10 @@ bool _looksLikeTeaser(String? text) {
   final trimmed = text.trim();
   if (trimmed.isEmpty) return true;
 
-  if (trimmed.length < 400) return true;
+  // Check length - content under 500 chars is likely just RSS description
+  if (trimmed.length < 500) return true;
 
+  // Check for paywall/teaser indicators
   final lower = trimmed.toLowerCase();
   const patterns = [
     'continue reading',

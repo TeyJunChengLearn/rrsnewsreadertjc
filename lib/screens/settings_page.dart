@@ -669,15 +669,15 @@ class SettingsPage extends StatelessWidget {
 
       if (success) {
         if (context.mounted) {
-          // Reload feeds
+          // Reload feeds WITHOUT cleanup to preserve all imported articles
           final rssProvider = Provider.of<RssProvider>(context, listen: false);
-          await rssProvider.loadInitial();
+          await rssProvider.loadInitial(skipCleanup: true);
 
           showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
               title: const Text('✓ Backup Restored!'),
-              content: const Text('Your backup has been restored successfully!\n\nFeeds are being refreshed now.'),
+              content: const Text('Your backup has been restored successfully!\n\nAll articles preserved (article limit not applied).\n\nArticles will be enriched progressively.'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx),

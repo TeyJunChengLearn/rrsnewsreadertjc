@@ -10,7 +10,8 @@
       "Bash(./gradlew signingReport:*)",
       "Bash(flutter run:*)",
       "Bash(adb logcat:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(flutter pub run workmanager --help:*)"
     ],
     "deny": [],
     "ask": []

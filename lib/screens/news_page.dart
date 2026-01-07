@@ -55,13 +55,22 @@ class _NewsPageState extends State<NewsPage> {
   Future<void> _loadSavedSortOrder() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_kSortOrderKey);
-    if (!mounted || saved == null) return;
+    if (!mounted) return;
+
+    final loadedOrder = saved == 'oldest'
+        ? _LocalSortOrder.oldestFirst
+        : _LocalSortOrder.latestFirst;
 
     setState(() {
-      _sortOrder = saved == 'oldest'
-          ? _LocalSortOrder.oldestFirst
-          : _LocalSortOrder.latestFirst;
+      _sortOrder = loadedOrder;
     });
+
+    // CRITICAL: Sync with RssProvider on app start
+    final rss = context.read<RssProvider>();
+    final providerSortOrder = loadedOrder == _LocalSortOrder.latestFirst
+        ? SortOrder.latestFirst
+        : SortOrder.oldestFirst;
+    rss.setSortOrder(providerSortOrder);
   }
 
   Future<void> _persistSortOrder(_LocalSortOrder order) async {
@@ -94,6 +103,29 @@ class _NewsPageState extends State<NewsPage> {
       });
 
       _persistSortOrder(result.sort);
+
+      // CRITICAL: Sync with RssProvider to update enrichment order
+      if (!mounted) return;
+      final rss = context.read<RssProvider>();
+
+      // Map local sort order to provider sort order
+      final providerSortOrder = result.sort == _LocalSortOrder.latestFirst
+          ? SortOrder.latestFirst
+          : SortOrder.oldestFirst;
+      rss.setSortOrder(providerSortOrder);
+
+      // Map local filters to provider filters
+      final providerReadFilter = result.read == _LocalReadFilter.unreadOnly
+          ? ReadFilter.unreadOnly
+          : result.read == _LocalReadFilter.readOnly
+              ? ReadFilter.readOnly
+              : ReadFilter.all;
+      rss.setReadFilter(providerReadFilter);
+
+      final providerBookmarkFilter = result.bm == _LocalBookmarkFilter.bookmarkedOnly
+          ? BookmarkFilter.bookmarkedOnly
+          : BookmarkFilter.all;
+      rss.setBookmarkFilter(providerBookmarkFilter);
     }
   }
 
@@ -206,6 +238,12 @@ class _NewsPageState extends State<NewsPage> {
                       });
 
                       _persistSortOrder(_LocalSortOrder.latestFirst);
+
+                      // CRITICAL: Sync with RssProvider to reset enrichment order
+                      final rss = context.read<RssProvider>();
+                      rss.setSortOrder(SortOrder.latestFirst);
+                      rss.setReadFilter(ReadFilter.all);
+                      rss.setBookmarkFilter(BookmarkFilter.all);
                     },
                     icon: const Icon(Icons.clear),
                     label: const Text('Clear'),
@@ -634,7 +672,12 @@ class _ArticleRow extends StatelessWidget {
 
     final Widget thumb = _greyscaleIfMissingContent(
       thumbUrl.isNotEmpty
-          ? Image.network(thumbUrl, fit: BoxFit.cover)
+          ? Image.network(
+              thumbUrl,
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+            )
           : Container(
               color: Colors.grey.shade300,
               alignment: Alignment.center,
@@ -801,15 +844,21 @@ class _ArticleRow extends StatelessWidget {
               height: 90,
               child: Stack(
                 children: [
-                  // Existing thumbnail with border
+                  // Existing thumbnail with border - ensure perfect circle
                   Container(
+                    width: 90,
+                    height: 90,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(color: accentRing, width: 3),
                     ),
                     padding: const EdgeInsets.all(4),
                     child: ClipOval(
-                      child: thumb,
+                      child: SizedBox(
+                        width: 82,
+                        height: 82,
+                        child: thumb,
+                      ),
                     ),
                   ),
 

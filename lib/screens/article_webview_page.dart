@@ -60,15 +60,16 @@ String bcpFromTranslateLanguage(TranslateLanguage lang) {
 
 /// Choose concrete TTS locale from short language code
 String _ttsLocaleForCode(String code) {
+  // Handle already-BCP47 codes (e.g., "en-US", "zh-CN")
+  if (code.contains('-')) return code;
+
   switch (code) {
     case 'en':
       return 'en-US';
     case 'ms':
       return 'ms-MY';
-    case 'zh-CN':
+    case 'zh':
       return 'zh-CN';
-    case 'zh-TW':
-      return 'zh-TW';
     case 'ja':
       return 'ja-JP';
     case 'ko':
@@ -98,6 +99,12 @@ String _ttsLocaleForCode(String code) {
     default:
       return 'en-US';
   }
+}
+
+/// Extract short language code from BCP-47 code (e.g., "zh-CN" -> "zh")
+String _extractShortLangCode(String bcpCode) {
+  if (!bcpCode.contains('-')) return bcpCode;
+  return bcpCode.split('-').first;
 }
 
 // ---------- Chinese number helper (for TTS) ----------
@@ -529,6 +536,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   // Hero image from Readability result (used in reader HTML)
   String? _heroImageUrl;
 
+  // Language detection cache: maps line index to detected language code
+  final Map<int, String> _languageCache = {};
+
   // Use global state for TTS (persists after dispose)
   _TtsState get _ttsState => _TtsState.instance;
   int get _currentLine => _ttsState.currentLine;
@@ -550,6 +560,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _isTranslating = false;
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
+  String? _articlePrimaryLanguage; // Primary language for this article (detected once, used throughout)
   SettingsProvider? _settings;
   VoidCallback? _settingsListener;
   static const int _readingNotificationId = 22;
@@ -741,6 +752,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _ttsState.readerModeOn = false; // Reset reader mode for new article
       // Clear the notification
       unawaited(_clearReadingNotification());
+
+      // Clear article language cache for new article
+      _articlePrimaryLanguage = null;
+      _languageCache.clear();
     }
 
     _attachSettingsListener();
@@ -1425,6 +1440,76 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
+  /// Detect the primary language of the entire article (by analyzing first few lines)
+  /// This language will be used consistently throughout the article for the same voice
+  Future<String> _detectArticlePrimaryLanguage() async {
+    // If already detected for this article, return cached value
+    if (_articlePrimaryLanguage != null) {
+      return _articlePrimaryLanguage!;
+    }
+
+    // Use first 5-10 lines (or all if fewer) to detect primary language
+    final sampleLines = _lines.take(10).where((line) => line.trim().isNotEmpty).take(5);
+    final sampleText = sampleLines.join(' ');
+
+    if (sampleText.isEmpty) {
+      _articlePrimaryLanguage = 'en-US';
+      return 'en-US';
+    }
+
+    // Detect language using ML Kit
+    final id = LanguageIdentifier(confidenceThreshold: 0.4);
+    try {
+      final code = await id.identifyLanguage(sampleText);
+
+      // Map ML Kit language codes to BCP-47 codes
+      String bcpCode = 'en-US'; // Default to English
+      if (code.startsWith('ms')) {
+        bcpCode = 'ms-MY';
+      } else if (code.startsWith('zh')) {
+        bcpCode = 'zh-CN';
+      } else if (code.startsWith('ja')) {
+        bcpCode = 'ja-JP';
+      } else if (code.startsWith('ko')) {
+        bcpCode = 'ko-KR';
+      } else if (code.startsWith('id')) {
+        bcpCode = 'id-ID';
+      } else if (code.startsWith('th')) {
+        bcpCode = 'th-TH';
+      } else if (code.startsWith('vi')) {
+        bcpCode = 'vi-VN';
+      } else if (code.startsWith('ar')) {
+        bcpCode = 'ar-SA';
+      } else if (code.startsWith('fr')) {
+        bcpCode = 'fr-FR';
+      } else if (code.startsWith('es')) {
+        bcpCode = 'es-ES';
+      } else if (code.startsWith('de')) {
+        bcpCode = 'de-DE';
+      } else if (code.startsWith('pt')) {
+        bcpCode = 'pt-PT';
+      } else if (code.startsWith('it')) {
+        bcpCode = 'it-IT';
+      } else if (code.startsWith('ru')) {
+        bcpCode = 'ru-RU';
+      } else if (code.startsWith('hi')) {
+        bcpCode = 'hi-IN';
+      } else if (code.startsWith('en')) {
+        bcpCode = 'en-US';
+      }
+
+      // Cache the result for this article
+      _articlePrimaryLanguage = bcpCode;
+      return bcpCode;
+    } catch (_) {
+      // On error, default to English
+      _articlePrimaryLanguage = 'en-US';
+      return 'en-US';
+    } finally {
+      id.close();
+    }
+  }
+
   Future<void> _toggleTranslateToSetting() async {
     final settings = context.read<SettingsProvider>();
     final code = settings.translateLangCode;
@@ -1451,6 +1536,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           // Keep current line position when reverting translation
           _webHighlightText = null;
         });
+        // Reset article language detection when un-translating
+        _articlePrimaryLanguage = null;
+
         await _reloadReaderHtml(showLoading: true);
         await _applyTtsLocale('en');
 
@@ -1510,6 +1598,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Keep current line position when translating
       _webHighlightText = null;
     });
+    // Reset article language detection when translating
+    // This ensures the translated language is used consistently
+    _articlePrimaryLanguage = null;
+
     await _reloadReaderHtml(showLoading: true);
     await _applyTtsLocale(code);
 
@@ -1806,9 +1898,22 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       return;
     }
 
-    if (targetCode != 'off') {
+    // Determine which language to use for TTS voice
+    String ttsLanguageCode;
+    if (_isTranslatedView && targetCode != 'off') {
+      // If translated view, use the translation language
+      ttsLanguageCode = targetCode;
       text = _normalizeForTts(text, targetCode);
+    } else {
+      // Use the article's primary language (detected once, consistent throughout)
+      ttsLanguageCode = await _detectArticlePrimaryLanguage();
+      // Normalize text for the article's language
+      text = _normalizeForTts(text, ttsLanguageCode);
     }
+
+    // Set TTS language to match the article's primary language (or translation language)
+    // This ensures the SAME voice is used throughout the entire article
+    await _applyTtsLocale(ttsLanguageCode);
 
     // Mark article as read when starting to speak (first time)
     if (!_isPlaying && widget.articleId != null) {
@@ -1883,29 +1988,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     if (i >= _lines.length) {
       // If at the end of current article
-      if (auto) {
-        // Automatic completion - show timer and auto-advance
+      // Immediately go to next article (no delay) if available
+      if (_hasNextArticle()) {
+        _navigateToNextArticle();
+      } else {
+        // No more articles, just stop
         setState(() => _isPlaying = false);
-
-        // Keep notification visible at the end
         if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
           await _showReadingNotification(_lines[_currentLine]);
-        }
-
-        // Start auto-advance timer if there's a next article available
-        if (_hasNextArticle()) {
-          _startAutoAdvanceTimer();
-        }
-      } else {
-        // Manual button press - immediately go to next article
-        if (_hasNextArticle()) {
-          _goToNextArticleNow();
-        } else {
-          // No more articles, just stop
-          setState(() => _isPlaying = false);
-          if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
-            await _showReadingNotification(_lines[_currentLine]);
-          }
         }
       }
       return;
@@ -2146,7 +2236,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           initialMainText: nextArticle.mainText,
           initialImageUrl: nextArticle.imageUrl,
           allArticles: widget.allArticles,
-          autoPlay: false, // Don't auto-play when manually skipping
+          autoPlay: true, // Auto-play when manually skipping to next article
         ),
       ),
     );

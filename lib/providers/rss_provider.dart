@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/feed_item.dart';
 import '../models/feed_source.dart';
@@ -130,7 +131,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
   // ---------------------------------------------------------------------------
   // LIFECYCLE / LOADING
   // ---------------------------------------------------------------------------
-  Future<void> loadInitial() async {
+  Future<void> loadInitial({bool skipCleanup = false}) async {
     _loading = true;
     _error = null;
     notifyListeners();
@@ -142,7 +143,12 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       await repo.loadAll(sources);
 
       // Trim per-feed to limit (bookmarks never deleted)
-      await repo.cleanupOldArticlesForSources(sources);
+      // Skip cleanup after restore to keep all imported articles
+      if (!skipCleanup) {
+        await repo.cleanupOldArticlesForSources(sources);
+      } else {
+        debugPrint('RssProvider: Skipping article cleanup (restore mode)');
+      }
 
       // Read trimmed list from DB (no extra network)
       final merged = await repo.readAllFromDb();
@@ -259,52 +265,119 @@ _scheduleBackgroundBackfill();
     }
   }
 bool _backfillInProgress = false;
+bool _shouldCancelBackfill = false;
+
  void _scheduleBackgroundBackfill() {
     unawaited(Future.microtask(backfillArticleContent));
+  }
+
+  void _restartBackfillWithNewPriority() {
+    if (_backfillInProgress) {
+      // Signal current backfill to stop
+      _shouldCancelBackfill = true;
+      debugPrint('RssProvider: Signaling enrichment to restart with new priority');
+    }
+    // Schedule new backfill (will start after current one stops)
+    _scheduleBackgroundBackfill();
   }
   Future<void> backfillArticleContent() async {
     if (_backfillInProgress) return;
     _backfillInProgress = true;
+    _shouldCancelBackfill = false;
     try {
       debugPrint('RssProvider: Starting background article enrichment for ${_items.length} items (one-by-one updates)');
 
       int enrichedCount = 0;
       int processedCount = 0;
 
-      // Process each article individually to update UI progressively
-      for (var i = 0; i < _items.length; i++) {
-        final item = _items[i];
-        processedCount++;
-
-        // Skip if already has content
-        if (item.link.isEmpty) continue;
+      // FIRST: Filter to only items that need enrichment
+      final itemsNeedingEnrichment = _items.where((item) {
+        if (item.link.isEmpty) return false;
         final existingText = (item.mainText ?? '').trim();
-        final hasContent = existingText.isNotEmpty && existingText.length >= 400;
+
+        // Only skip if article has SUBSTANTIAL content (500+ chars)
+        // This prevents skipping articles with short RSS descriptions
+        final hasSubstantialContent = existingText.length >= 500;
         final hasImage = (item.imageUrl ?? '').trim().isNotEmpty;
 
-        if (hasContent && hasImage) {
-          // debugPrint('RssProvider: Article $processedCount already has content, skipping');
-          continue;
+        // Enrich if missing substantial content OR missing image
+        return !hasSubstantialContent || !hasImage;
+      }).toList();
+
+      debugPrint('RssProvider: ${itemsNeedingEnrichment.length} of ${_items.length} articles need enrichment');
+
+      // SECOND: Prioritize visible items first
+      final visibleIds = visibleItems.map((e) => e.id).toSet();
+
+      // Separate visible and hidden items (from filtered list)
+      final visibleNeedingEnrichment = <FeedItem>[];
+      final hiddenNeedingEnrichment = <FeedItem>[];
+
+      for (final item in itemsNeedingEnrichment) {
+        if (visibleIds.contains(item.id)) {
+          visibleNeedingEnrichment.add(item);
+        } else {
+          hiddenNeedingEnrichment.add(item);
+        }
+      }
+
+      // Sort both lists based on user's preference
+      final sortFn = (FeedItem a, FeedItem b) {
+        final ad = a.pubDate?.millisecondsSinceEpoch ?? 0;
+        final bd = b.pubDate?.millisecondsSinceEpoch ?? 0;
+        final cmp = ad.compareTo(bd);
+        return _sortOrder == SortOrder.latestFirst ? -cmp : cmp;
+      };
+
+      visibleNeedingEnrichment.sort(sortFn);
+      hiddenNeedingEnrichment.sort(sortFn);
+
+      // Process visible items first, then hidden ones
+      final sortedItems = [...visibleNeedingEnrichment, ...hiddenNeedingEnrichment];
+
+      debugPrint('RssProvider: Enriching ${visibleNeedingEnrichment.length} visible items first, then ${hiddenNeedingEnrichment.length} hidden items');
+      debugPrint('RssProvider: Enrichment order: ${_sortOrder == SortOrder.oldestFirst ? "OLDEST" : "NEWEST"} first');
+
+      // Debug: Show first and last article dates to verify sort order
+      if (sortedItems.isNotEmpty) {
+        final first = sortedItems.first;
+        final last = sortedItems.last;
+        debugPrint('RssProvider: 🔍 FIRST article to enrich: "${first.title}" (${first.pubDate})');
+        debugPrint('RssProvider: 🔍 LAST article to enrich: "${last.title}" (${last.pubDate})');
+      }
+
+      // Process each article individually to update UI progressively
+      for (final item in sortedItems) {
+        // Check if we should cancel and restart with new priority
+        if (_shouldCancelBackfill) {
+          debugPrint('RssProvider: Enrichment cancelled, restarting with new filter priority');
+          break;
         }
 
-        // Enrich this article
+        processedCount++;
+
+        // Enrich this article (already filtered, no need to check again)
         try {
-          debugPrint('RssProvider: Enriching article $processedCount: ${item.title.substring(0, 50)}...');
+          debugPrint('RssProvider: [$processedCount/${sortedItems.length}] 📖 NOW ENRICHING: "${item.title}" (Date: ${item.pubDate})');
           final content = await repo.populateArticleContent([item]);
 
           if (content.isNotEmpty && content.containsKey(item.id)) {
-            _items[i] = _items[i].copyWith(
-              mainText: content[item.id]!.mainText ?? _items[i].mainText,
-              imageUrl: content[item.id]!.imageUrl ?? _items[i].imageUrl,
-            );
-            enrichedCount++;
+            // Find the item in the original list and update it
+            final idx = _items.indexWhere((e) => e.id == item.id);
+            if (idx != -1) {
+              _items[idx] = _items[idx].copyWith(
+                mainText: content[item.id]!.mainText ?? _items[idx].mainText,
+                imageUrl: content[item.id]!.imageUrl ?? _items[idx].imageUrl,
+              );
+              enrichedCount++;
 
-            // Update UI immediately after each article is enriched
-            debugPrint('RssProvider: ✓ Article $enrichedCount enriched - updating UI now!');
-            notifyListeners();
+              // Update UI immediately after each article is enriched
+              debugPrint('RssProvider: ✓ Article $enrichedCount enriched - updating UI now!');
+              notifyListeners();
 
-            // Small delay to make the progressive update visible
-            await Future.delayed(const Duration(milliseconds: 150));
+              // Small delay to make the progressive update visible
+              await Future.delayed(const Duration(milliseconds: 150));
+            }
           } else {
             debugPrint('RssProvider: ⚠ Article $processedCount failed to enrich');
           }
@@ -321,19 +394,33 @@ bool _backfillInProgress = false;
   // ---------------------------------------------------------------------------
   // FILTERS / SORTING (the ones news_page.dart calls)
   // ---------------------------------------------------------------------------
-  void setSortOrder(SortOrder order) {
+  void setSortOrder(SortOrder order) async {
+    if (_sortOrder == order) return;
     _sortOrder = order;
+
+    // Save to SharedPreferences for background task
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('sortOrder', order == SortOrder.latestFirst ? 'latestFirst' : 'oldestFirst');
+
     notifyListeners();
+    // Restart enrichment with new sort priority
+    _restartBackfillWithNewPriority();
   }
 
   void setBookmarkFilter(BookmarkFilter filter) {
+    if (_bookmarkFilter == filter) return;
     _bookmarkFilter = filter;
     notifyListeners();
+    // Restart enrichment to prioritize newly visible items
+    _restartBackfillWithNewPriority();
   }
 
   void setReadFilter(ReadFilter filter) {
+    if (_readFilter == filter) return;
     _readFilter = filter;
     notifyListeners();
+    // Restart enrichment to prioritize newly visible items
+    _restartBackfillWithNewPriority();
   }
 
   void setSearchQuery(String q) {

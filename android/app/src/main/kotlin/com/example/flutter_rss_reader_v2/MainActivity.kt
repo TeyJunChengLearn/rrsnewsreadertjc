@@ -12,6 +12,7 @@ import io.flutter.plugin.common.MethodChannel
 
 import io.flutter.embedding.android.FlutterActivity
 import org.json.JSONArray
+import org.json.JSONObject
 
 private const val CHANNEL = "com.flutter_rss_reader/cookies"
 
@@ -168,13 +169,19 @@ class MainActivity : FlutterActivity() {
                                         })();
                                     """.trimIndent()
 
-                                    // First execute cleanup, then extract HTML
+                                    // First execute cleanup, then wait for content to load
                                     view.evaluateJavascript(paywallRemovalScript) { _ ->
                                         if (completed) return@evaluateJavascript
 
-                                        // Small delay to let DOM settle after manipulations
-                                        handler.postDelayed({
-                                            if (completed) return@postDelayed
+                                        // Wait for article content to actually appear in the DOM
+                                        waitForArticleContent(view, handler, 0) { contentReady ->
+                                            if (completed) return@waitForArticleContent
+
+                                            if (contentReady) {
+                                                android.util.Log.d("CookieBridge", "  ✓ Article content detected, extracting HTML")
+                                            } else {
+                                                android.util.Log.w("CookieBridge", "  ⚠ Timeout waiting for content, extracting anyway")
+                                            }
 
                                             view.evaluateJavascript(
                                                 "(function(){return document.documentElement.outerHTML;})();"
@@ -188,7 +195,7 @@ class MainActivity : FlutterActivity() {
                                                 android.util.Log.d("CookieBridge", "  ✓ HTML extracted (${decodeJavascriptString(html)?.length ?: 0} chars)")
                                                 result.success(decodeJavascriptString(html))
                                             }
-                                        }, 500)  // 500ms delay for DOM to settle
+                                        }
                                     }
                                 }, postLoadDelayMs.toLong())
                             }
@@ -407,6 +414,93 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * Waits for article content to appear in the DOM by polling for paragraphs with substantial text.
+     * This prevents capturing HTML before JavaScript-loaded content is rendered.
+     */
+    private fun waitForArticleContent(
+        webView: WebView,
+        handler: Handler,
+        attemptCount: Int,
+        callback: (Boolean) -> Unit
+    ) {
+        val maxAttempts = 10  // Poll up to 10 times
+        val pollIntervalMs = 500L  // Check every 500ms
+
+        // JavaScript to check if article content has loaded
+        val contentCheckScript = """
+            (function() {
+                // Look for article containers with common selectors
+                const articleSelectors = [
+                    'article',
+                    '[role="main"]',
+                    '.article-body',
+                    '.story-body',
+                    '.post-content',
+                    '.entry-content',
+                    '.article-content',
+                    'main'
+                ];
+
+                let totalTextLength = 0;
+                let paragraphCount = 0;
+
+                for (const selector of articleSelectors) {
+                    const elements = document.querySelectorAll(selector);
+                    for (const element of elements) {
+                        const paragraphs = element.querySelectorAll('p');
+                        for (const p of paragraphs) {
+                            const text = p.textContent.trim();
+                            if (text.length > 50) {  // Meaningful paragraph
+                                totalTextLength += text.length;
+                                paragraphCount++;
+                            }
+                        }
+                    }
+                }
+
+                // Consider content loaded if we have at least 3 paragraphs with 500+ total chars
+                const hasContent = paragraphCount >= 3 && totalTextLength >= 500;
+
+                return JSON.stringify({
+                    hasContent: hasContent,
+                    paragraphCount: paragraphCount,
+                    totalTextLength: totalTextLength
+                });
+            })();
+        """.trimIndent()
+
+        webView.evaluateJavascript(contentCheckScript) { result ->
+            try {
+                val jsonStr = decodeJavascriptString(result) ?: "{}"
+                val json = org.json.JSONObject(jsonStr)
+                val hasContent = json.optBoolean("hasContent", false)
+                val paragraphCount = json.optInt("paragraphCount", 0)
+                val totalTextLength = json.optInt("totalTextLength", 0)
+
+                android.util.Log.d("CookieBridge", "  Content check attempt ${attemptCount + 1}/$maxAttempts: $paragraphCount paragraphs, $totalTextLength chars")
+
+                if (hasContent) {
+                    // Content is ready!
+                    callback(true)
+                } else if (attemptCount >= maxAttempts - 1) {
+                    // Timeout - proceed anyway
+                    android.util.Log.w("CookieBridge", "  Content not detected after $maxAttempts attempts, proceeding anyway")
+                    callback(false)
+                } else {
+                    // Try again after delay
+                    handler.postDelayed({
+                        waitForArticleContent(webView, handler, attemptCount + 1, callback)
+                    }, pollIntervalMs)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CookieBridge", "  Error checking content: ${e.message}")
+                // On error, just proceed
+                callback(false)
+            }
+        }
     }
 
     private fun applyCookieHeader(

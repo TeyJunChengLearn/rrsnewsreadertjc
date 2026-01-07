@@ -14,6 +14,7 @@ import 'services/readability_service.dart';
 import 'services/article_content_service.dart';
 import 'services/cookie_bridge.dart';
 import 'services/android_webview_extractor.dart';
+import 'services/background_task_service.dart';
 
 import 'data/http_feed_fetcher.dart';
 import 'data/rss_atom_parser.dart';
@@ -24,6 +25,10 @@ import 'screens/root_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize background task service for periodic article fetching
+  await BackgroundTaskService.initialize();
+
   runApp(const AppBootstrap());
 }
 
