@@ -11,6 +11,7 @@ class FeedItem {
   final int isRead;
   final bool isBookmarked;
   final int? readingPosition;
+  final int enrichmentAttempts;
 
   FeedItem({
     required this.id,
@@ -24,6 +25,7 @@ class FeedItem {
     this.isRead = 0,
     this.isBookmarked = false,
     this.readingPosition,
+    this.enrichmentAttempts = 0,
   });
 
   FeedItem copyWith({
@@ -38,6 +40,7 @@ class FeedItem {
     int? isRead,
     bool? isBookmarked,
     int? readingPosition,
+    int? enrichmentAttempts,
   }) {
     return FeedItem(
       id: id ?? this.id,
@@ -51,6 +54,7 @@ class FeedItem {
       isRead: isRead ?? this.isRead,
       isBookmarked: isBookmarked ?? this.isBookmarked,
       readingPosition: readingPosition ?? this.readingPosition,
+      enrichmentAttempts: enrichmentAttempts ?? this.enrichmentAttempts,
     );
   }
 
@@ -74,6 +78,7 @@ class FeedItem {
       'isRead': normalizedRead,
       'isBookmarked': isBookmarked ? 1 : 0,
       'readingPosition': readingPosition,
+      'enrichmentAttempts': enrichmentAttempts,
     };
   }
 
@@ -94,6 +99,7 @@ class FeedItem {
       isRead: (map['isRead'] as int?) ?? 0,
       isBookmarked: (map['isBookmarked'] ?? 0) == 1,
       readingPosition: map['readingPosition'] as int?,
+      enrichmentAttempts: (map['enrichmentAttempts'] as int?) ?? 0,
     );
   }
 }

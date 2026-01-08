@@ -10,6 +10,7 @@ import 'package:google_mlkit_translation/google_mlkit_translation.dart';
 import 'package:google_mlkit_language_id/google_mlkit_language_id.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../providers/settings_provider.dart';
 import '../providers/rss_provider.dart';
@@ -285,6 +286,9 @@ class _TtsState {
   // Callback for widget-specific completion handling (highlighting, etc.)
   Future<void> Function()? widgetCompletionHandler;
 
+  // Callback for auto-translate (set by current widget instance)
+  Future<void> Function(List<String> lines)? autoTranslateCallback;
+
   static final _TtsState instance = _TtsState._internal();
   _TtsState._internal();
 }
@@ -357,18 +361,27 @@ Future<bool> _loadNextArticleGlobal() async {
     if (text.isEmpty) return false;
 
     // Build lines list: header + content
-    final rawLines = text
+    final rawParagraphs = text
         .split('\n\n')
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList();
+
+    // Group paragraphs into chunks for smoother TTS reading
+    final chunkedLines = <String>[];
+    const chunkSize = 3; // Speak 3 paragraphs at a time
+    for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
+      final end = (i + chunkSize).clamp(0, rawParagraphs.length);
+      final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
+      chunkedLines.add(chunk);
+    }
 
     final combined = <String>[];
     final header = nextArticle.title.trim();
     if (header.isNotEmpty) {
       combined.add(header);
     }
-    combined.addAll(rawLines);
+    combined.addAll(chunkedLines);
 
     if (combined.isEmpty) return false;
 
@@ -393,6 +406,15 @@ Future<bool> _loadNextArticleGlobal() async {
       await state.articleDao!.updateReadingPosition(nextArticle.id, 0);
     } catch (_) {
       // Ignore errors
+    }
+
+    // Call auto-translate callback if available
+    if (state.autoTranslateCallback != null) {
+      try {
+        await state.autoTranslateCallback!(state.lines);
+      } catch (_) {
+        // Ignore translation errors
+      }
     }
 
     return true;
@@ -667,6 +689,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     _globalTts.setCompletionHandler(() async {
       final s = _TtsState.instance;
+
       // Continue playing in background using global function
       if (!s.isPlaying) {
         // Update notification to paused
@@ -717,6 +740,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Register this widget's completion handler (for highlighting during continuous playback)
     _ttsState.widgetCompletionHandler = _handleWidgetCompletion;
+
+    // Register auto-translate callback for background TTS
+    _ttsState.autoTranslateCallback = _handleGlobalAutoTranslate;
 
     // Provide database and provider access to global state for continuous reading
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -786,6 +812,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
 
       await _ensureLinesLoaded();
+
+      // Auto-translate if enabled (after lines are loaded)
+      unawaited(_autoTranslateIfEnabled());
+
       final hasValidLine =
           _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length;
 
@@ -833,21 +863,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _settings ??= settings;
       final rate = settings.ttsSpeechRate;
 
+      debugPrint('🔊 Applying TTS speech rate: $rate (playing: $_isPlaying)');
+
       // Always apply the speech rate to the global TTS instance
-      // This ensures the rate persists even when widget is disposed
+      // The new rate will apply to the next line when it starts speaking
       await _globalTts.setSpeechRate(rate);
 
-      // If currently playing and restartIfPlaying is true, restart playback to apply the new rate immediately
-      // FlutterTTS speech rate changes only apply to NEW utterances on most platforms
-      if (restartIfPlaying && _isPlaying && mounted) {
-        await _globalTts.stop();
-        // Use a small delay to ensure stop() completes before restarting
-        await Future.delayed(const Duration(milliseconds: 100));
-        if (mounted && _isPlaying) {
-          await _speakCurrentLine();
-        }
-      }
+      debugPrint('✅ TTS speech rate set to: $rate');
+
+      // Don't restart current line - let it finish at old speed
+      // New speed will apply automatically on next line
     } catch (e) {
+      debugPrint('❌ Error applying TTS speech rate: $e');
       // Context might not be available yet, try again later
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -1611,6 +1638,173 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
+  /// Handle auto-translate for global TTS (background playback)
+  /// This is called when loading next article during background TTS
+  Future<void> _handleGlobalAutoTranslate(List<String> lines) async {
+    if (!mounted) return;
+
+    final settings = context.read<SettingsProvider>();
+
+    // Check if auto-translate is enabled AND translation language is set
+    if (!settings.autoTranslate || settings.translateLangCode == 'off') {
+      return;
+    }
+
+    if (lines.isEmpty) return;
+
+    final code = settings.translateLangCode;
+    final target = _translateLanguageFromCode(code);
+    if (target == null) return;
+
+    try {
+      // Detect source language from the first few lines
+      final sampleText = lines.take(5).join(' ');
+      final id = LanguageIdentifier(confidenceThreshold: 0.4);
+      String mlKitCode = await id.identifyLanguage(sampleText);
+      id.close();
+
+      // Map ML Kit codes to TranslateLanguage
+      TranslateLanguage src = TranslateLanguage.english;
+      if (mlKitCode.startsWith('ms')) {
+        src = TranslateLanguage.malay;
+      } else if (mlKitCode.startsWith('zh')) {
+        src = TranslateLanguage.chinese;
+      } else if (mlKitCode.startsWith('ja')) {
+        src = TranslateLanguage.japanese;
+      } else if (mlKitCode.startsWith('ko')) {
+        src = TranslateLanguage.korean;
+      } else if (mlKitCode.startsWith('id')) {
+        src = TranslateLanguage.indonesian;
+      } else if (mlKitCode.startsWith('th')) {
+        src = TranslateLanguage.thai;
+      } else if (mlKitCode.startsWith('vi')) {
+        src = TranslateLanguage.vietnamese;
+      } else if (mlKitCode.startsWith('ar')) {
+        src = TranslateLanguage.arabic;
+      } else if (mlKitCode.startsWith('fr')) {
+        src = TranslateLanguage.french;
+      } else if (mlKitCode.startsWith('es')) {
+        src = TranslateLanguage.spanish;
+      } else if (mlKitCode.startsWith('de')) {
+        src = TranslateLanguage.german;
+      } else if (mlKitCode.startsWith('pt')) {
+        src = TranslateLanguage.portuguese;
+      } else if (mlKitCode.startsWith('it')) {
+        src = TranslateLanguage.italian;
+      } else if (mlKitCode.startsWith('ru')) {
+        src = TranslateLanguage.russian;
+      } else if (mlKitCode.startsWith('hi')) {
+        src = TranslateLanguage.hindi;
+      }
+
+      // Create translator
+      final translator = OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
+
+      final translated = <String>[];
+      for (final line in lines) {
+        if (line.startsWith('__IMG__|')) {
+          translated.add(line);
+          continue;
+        }
+        final t = await translator.translateText(line);
+        translated.add(t);
+      }
+
+      await translator.close();
+
+      // Update global state with translated lines
+      _ttsState.lines = translated;
+
+      // Update TTS locale for the new language
+      await _applyTtsLocale(code);
+    } catch (_) {
+      // Silent failure - auto-translate is optional
+    }
+  }
+
+  /// Auto-translate article if autoTranslate setting is enabled
+  /// Called automatically when opening article or switching to next article
+  Future<void> _autoTranslateIfEnabled() async {
+    if (!mounted) return;
+
+    final settings = context.read<SettingsProvider>();
+
+    // Check if auto-translate is enabled AND translation language is set
+    if (!settings.autoTranslate || settings.translateLangCode == 'off') {
+      return;
+    }
+
+    // Don't auto-translate if already translated
+    if (_isTranslatedView) return;
+
+    // Don't auto-translate if currently translating
+    if (_isTranslating) return;
+
+    await _ensureLinesLoaded();
+    if (_lines.isEmpty) return;
+
+    final code = settings.translateLangCode;
+    final target = _translateLanguageFromCode(code);
+    if (target == null) return;
+
+    setState(() => _isTranslating = true);
+
+    try {
+      // Detect source language from the article text
+      final src = await _detectSourceLang();
+
+      // Create translator
+      final translator =
+          OnDeviceTranslator(sourceLanguage: src, targetLanguage: target);
+
+      _originalLinesCache ??= List<String>.from(_lines);
+      final translated = <String>[];
+
+      for (int i = 0; i < _lines.length; i++) {
+        final line = _lines[i];
+
+        // image marker line (we're not using this right now, but keep logic)
+        if (line.startsWith('__IMG__|')) {
+          translated.add(line);
+          continue;
+        }
+
+        final t = await translator.translateText(line);
+        translated.add(t);
+      }
+
+      await translator.close();
+
+      if (!mounted) return;
+
+      final wasPlaying = _isPlaying;
+      setState(() {
+        _lines
+          ..clear()
+          ..addAll(translated);
+        _isTranslatedView = true;
+        _isTranslating = false;
+        _webHighlightText = null;
+      });
+
+      // Reset article language detection when translating
+      _articlePrimaryLanguage = null;
+
+      await _reloadReaderHtml(showLoading: false); // Don't show loading spinner for auto-translate
+      await _applyTtsLocale(code);
+
+      // If was playing before translation, continue playing with new language
+      if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
+        await _speakCurrentLine();
+      }
+    } catch (e) {
+      // Silent failure - auto-translate is optional
+      if (mounted) {
+        setState(() => _isTranslating = false);
+      }
+    }
+  }
+
   // --------------- TTS playback ---------------
 
   Future<int?> _loadSavedReadingPosition() async {
@@ -1700,13 +1894,24 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     final previewOnly = _isLikelyPreviewText(text, pagePaywalled);
-    final rawLines = text.isEmpty
+    final rawParagraphs = text.isEmpty
         ? <String>[]
         : text
             .split('\n\n')
             .map((e) => e.trim())
             .where((e) => e.isNotEmpty)
             .toList();
+
+    // Group paragraphs into chunks for smoother TTS reading
+    // Instead of speaking each paragraph separately with long pauses,
+    // group 3-4 paragraphs together so TTS reads more continuously
+    final chunkedLines = <String>[];
+    const chunkSize = 3; // Speak 3 paragraphs at a time
+    for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
+      final end = (i + chunkSize).clamp(0, rawParagraphs.length);
+      final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
+      chunkedLines.add(chunk);
+    }
 
     // 👇 Build final lines list: optional header + article content
     final combined = <String>[];
@@ -1717,7 +1922,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     if (header.isNotEmpty) {
       combined.add(header);
     }
-    combined.addAll(rawLines);
+    combined.addAll(chunkedLines);
 
     _heroImageUrl ??= result?.imageUrl;
 
@@ -1725,7 +1930,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     // like a short preview. Some sites keep paywall markers in the DOM even
     // after login, so don't block full-text articles just because markers
     // exist.
-    final looksPaywalled = previewOnly || (pagePaywalled && rawLines.length <= 3);
+    final looksPaywalled = previewOnly || (pagePaywalled && rawParagraphs.length <= 3);
 
     // Load saved reading position
     final savedPosition = await _loadSavedReadingPosition();
@@ -1948,6 +2153,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _isPlaying = true;
       _webHighlightText = null;
     });
+
+    // Enable WakeLock to keep screen on during TTS playback
+    try {
+      await WakelockPlus.enable();
+      debugPrint('TTS: 🔒 WakeLock enabled - screen will stay on during playback');
+    } catch (e) {
+      debugPrint('TTS: ⚠️ Failed to enable WakeLock: $e');
+    }
+
     // Start periodic position saving during playback
     _startPeriodicSave();
     // Start periodic highlight syncing to catch global state changes
@@ -1980,6 +2194,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
       setState(() => _isPlaying = false);
+      // Disable WakeLock when stopping due to empty lines
+      WakelockPlus.disable().catchError((e) => debugPrint('TTS: Failed to disable WakeLock: $e'));
       await _clearReadingNotification();
       return;
     }
@@ -1991,9 +2207,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Immediately go to next article (no delay) if available
       if (_hasNextArticle()) {
         _navigateToNextArticle();
+        // WakeLock stays enabled - continuing to next article
       } else {
         // No more articles, just stop
         setState(() => _isPlaying = false);
+        // Disable WakeLock when reaching end of all articles
+        WakelockPlus.disable().catchError((e) => debugPrint('TTS: Failed to disable WakeLock: $e'));
         if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
           await _showReadingNotification(_lines[_currentLine]);
         }
@@ -2035,6 +2254,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     await _globalTts.stop();
     if (mounted) {
       setState(() => _isPlaying = false);
+
+      // Disable WakeLock when TTS stops
+      try {
+        await WakelockPlus.disable();
+        debugPrint('TTS: 🔓 WakeLock disabled - screen can turn off now');
+      } catch (e) {
+        debugPrint('TTS: ⚠️ Failed to disable WakeLock: $e');
+      }
+
       // Save position when stopping
       await _saveReadingPosition();
       // Update notification to show paused state instead of clearing
@@ -2402,6 +2630,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
+
+    // Disable WakeLock when navigating away (just in case)
+    // This ensures screen can turn off even if TTS is still playing in background
+    WakelockPlus.disable().catchError((e) {
+      debugPrint('TTS: Failed to disable WakeLock on dispose: $e');
+    });
+
     // Unregister widget-specific handlers
     // The global handlers will take over for background playback
     if (_ttsState.widgetActionHandler == _handleWidgetNotificationAction) {
@@ -2508,77 +2743,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            if (_readerHintVisible && !_readerOn)
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: 90,
-                child: SafeArea(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 250),
-                    opacity: _readerHintVisible ? 1 : 0,
-                    child: Material(
-                      elevation: 10,
-                      borderRadius: BorderRadius.circular(14),
-                      color:
-                          Theme.of(context).colorScheme.surface.withOpacity(0.97),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: _toggleReader,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.chrome_reader_mode),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'Reader view ready',
-                                      style: TextStyle(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurface,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Tap to open a clean, readability-powered view of this page.',
-                                      style: TextStyle(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurface
-                                            .withOpacity(0.8),
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'Dismiss reader hint',
-                                icon: const Icon(Icons.close),
-                                onPressed: () {
-                                  setState(() {
-                                    _readerHintDismissed = true;
-                                    _readerHintVisible = false;
-                                  });
-                                },
-                              ),
-                            ],
                           ),
                         ),
                       ),

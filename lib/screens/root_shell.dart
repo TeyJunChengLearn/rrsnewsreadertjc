@@ -75,6 +75,9 @@ class _RootShellState extends State<RootShell> {
       FeedPage(),
     ];
 
+    final rss = context.watch<RssProvider>();
+    final unreadCount = rss.unreadCount;
+
     return Scaffold(
       body: IndexedStack(
         index: _index,
@@ -87,18 +90,28 @@ class _RootShellState extends State<RootShell> {
             _index = value;
           });
         },
-        destinations: const [
-          NavigationDestination(
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.settings_outlined),
             selectedIcon: Icon(Icons.settings),
             label: 'Settings',
           ),
           NavigationDestination(
-            icon: Icon(Icons.newspaper_outlined),
-            selectedIcon: Icon(Icons.newspaper),
+            icon: Badge(
+              isLabelVisible: unreadCount > 0,
+              label: Text('$unreadCount'),
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.newspaper_outlined),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: unreadCount > 0,
+              label: Text('$unreadCount'),
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.newspaper),
+            ),
             label: 'News',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.rss_feed_outlined),
             selectedIcon: Icon(Icons.rss_feed),
             label: 'Feeds',

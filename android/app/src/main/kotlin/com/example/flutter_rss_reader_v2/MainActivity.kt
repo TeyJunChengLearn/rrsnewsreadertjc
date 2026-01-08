@@ -135,69 +135,69 @@ class MainActivity : FlutterActivity() {
                             override fun onPageFinished(view: WebView, finishedUrl: String) {
                                 if (completed) return
 
-                                handler.postDelayed({
-                                    if (completed) return@postDelayed
+                                // Use automatic content detection instead of fixed delay
+                                // Execute paywall cleanup immediately, then wait for content
+                                val paywallRemovalScript = """
+                                    (function() {
+                                        // Remove common paywall UI elements
+                                        document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], .overlay, .modal-backdrop').forEach(el => el.remove());
 
-                                    // Execute JavaScript to remove paywall overlays and unhide content
-                                    val paywallRemovalScript = """
-                                        (function() {
-                                            // Remove common paywall UI elements
-                                            document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], .overlay, .modal-backdrop').forEach(el => el.remove());
-
-                                            // Remove blur effects
-                                            document.querySelectorAll('*').forEach(el => {
-                                                const style = window.getComputedStyle(el);
-                                                if (style.filter && (style.filter.includes('blur') || style.webkitFilter && style.webkitFilter.includes('blur'))) {
-                                                    el.style.filter = 'none';
-                                                    el.style.webkitFilter = 'none';
-                                                }
-                                            });
-
-                                            // Unhide elements that might contain subscriber content
-                                            document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"]').forEach(el => {
-                                                el.style.display = 'block';
-                                                el.style.visibility = 'visible';
-                                                el.style.opacity = '1';
-                                                el.style.height = 'auto';
-                                            });
-
-                                            // Re-enable scrolling (some paywalls disable it)
-                                            document.body.style.overflow = 'auto';
-                                            document.documentElement.style.overflow = 'auto';
-
-                                            return 'cleanup-done';
-                                        })();
-                                    """.trimIndent()
-
-                                    // First execute cleanup, then wait for content to load
-                                    view.evaluateJavascript(paywallRemovalScript) { _ ->
-                                        if (completed) return@evaluateJavascript
-
-                                        // Wait for article content to actually appear in the DOM
-                                        waitForArticleContent(view, handler, 0) { contentReady ->
-                                            if (completed) return@waitForArticleContent
-
-                                            if (contentReady) {
-                                                android.util.Log.d("CookieBridge", "  ✓ Article content detected, extracting HTML")
-                                            } else {
-                                                android.util.Log.w("CookieBridge", "  ⚠ Timeout waiting for content, extracting anyway")
+                                        // Remove blur effects
+                                        document.querySelectorAll('*').forEach(el => {
+                                            const style = window.getComputedStyle(el);
+                                            if (style.filter && (style.filter.includes('blur') || style.webkitFilter && style.webkitFilter.includes('blur'))) {
+                                                el.style.filter = 'none';
+                                                el.style.webkitFilter = 'none';
                                             }
+                                        });
 
-                                            view.evaluateJavascript(
-                                                "(function(){return document.documentElement.outerHTML;})();"
-                                            ) { html ->
-                                                if (completed) return@evaluateJavascript
-                                                completed = true
-                                                handler.removeCallbacks(timeoutRunnable)
-                                                cookieManager.flush()
-                                                webView.destroy()
+                                        // Unhide elements that might contain subscriber content
+                                        document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"]').forEach(el => {
+                                            el.style.display = 'block';
+                                            el.style.visibility = 'visible';
+                                            el.style.opacity = '1';
+                                            el.style.height = 'auto';
+                                        });
 
-                                                android.util.Log.d("CookieBridge", "  ✓ HTML extracted (${decodeJavascriptString(html)?.length ?: 0} chars)")
-                                                result.success(decodeJavascriptString(html))
-                                            }
+                                        // Re-enable scrolling (some paywalls disable it)
+                                        document.body.style.overflow = 'auto';
+                                        document.documentElement.style.overflow = 'auto';
+
+                                        return 'cleanup-done';
+                                    })();
+                                """.trimIndent()
+
+                                android.util.Log.d("CookieBridge", "  ⏱ Page finished loading, waiting for article content...")
+
+                                // First execute cleanup, then wait for content to load
+                                view.evaluateJavascript(paywallRemovalScript) { _ ->
+                                    if (completed) return@evaluateJavascript
+
+                                    // Wait for article content to actually appear in the DOM
+                                    // This automatically detects when content is ready (no fixed delay)
+                                    waitForArticleContent(view, handler, 0) { contentReady ->
+                                        if (completed) return@waitForArticleContent
+
+                                        if (contentReady) {
+                                            android.util.Log.d("CookieBridge", "  ✓ Article content detected, extracting HTML")
+                                        } else {
+                                            android.util.Log.w("CookieBridge", "  ⚠ Timeout waiting for content, extracting anyway")
+                                        }
+
+                                        view.evaluateJavascript(
+                                            "(function(){return document.documentElement.outerHTML;})();"
+                                        ) { html ->
+                                            if (completed) return@evaluateJavascript
+                                            completed = true
+                                            handler.removeCallbacks(timeoutRunnable)
+                                            cookieManager.flush()
+                                            webView.destroy()
+
+                                            android.util.Log.d("CookieBridge", "  ✓ HTML extracted (${decodeJavascriptString(html)?.length ?: 0} chars)")
+                                            result.success(decodeJavascriptString(html))
                                         }
                                     }
-                                }, postLoadDelayMs.toLong())
+                                }
                             }
 
                             override fun onReceivedError(

@@ -12,18 +12,23 @@ class SettingsProvider extends ChangeNotifier {
   // how many articles to keep per feed (not enforced yet)
   int _articleLimitPerFeed = 1000;
 
+  // Auto-translate articles when opening them
+  bool _autoTranslate = false;
+
   bool get darkTheme => _darkTheme;
   bool get displaySummary => _displaySummary;
   bool get highlightText => _highlightText;
   int get updateIntervalMinutes => _updateIntervalMinutes;
   int get articleLimitPerFeed => _articleLimitPerFeed;
   double get ttsSpeechRate => _ttsSpeechRate;
+  bool get autoTranslate => _autoTranslate;
   static const _kDarkTheme = 'darkTheme';
   static const _kDisplaySummary = 'displaySummary';
   static const _kHighlightText = 'highlightText';
   static const _kUpdateIntervalMinutes = 'updateIntervalMinutes';
   static const _kArticleLimitPerFeed = 'articleLimitPerFeed';
   static const _kTtsSpeechRate = 'ttsSpeechRate';
+  static const _kAutoTranslate = 'autoTranslate';
 
   Future<void> loadFromStorage() async {
     final prefs = await SharedPreferences.getInstance();
@@ -36,6 +41,7 @@ class SettingsProvider extends ChangeNotifier {
     _articleLimitPerFeed =
         prefs.getInt(_kArticleLimitPerFeed) ?? _articleLimitPerFeed;
     _ttsSpeechRate = prefs.getDouble(_kTtsSpeechRate) ?? _ttsSpeechRate;
+    _autoTranslate = prefs.getBool(_kAutoTranslate) ?? _autoTranslate;
     // 🔴 add this line so translate language is restored on startup
     _translateLangCode =
         prefs.getString(_kTranslateLangKey) ?? _translateLangCode;
@@ -74,9 +80,11 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> setTtsSpeechRate(double rate) async {
     // Keep within a human-friendly range supported by most platforms
     _ttsSpeechRate = rate.clamp(0.3, 1.2).toDouble();
+    debugPrint('⚙️ SettingsProvider: TTS speech rate changed to $_ttsSpeechRate');
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kTtsSpeechRate, _ttsSpeechRate);
+    debugPrint('💾 SettingsProvider: TTS speech rate saved to storage');
   }
 
   Future<void> setArticleLimitPerFeed(int value) async {
@@ -87,6 +95,13 @@ class SettingsProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kArticleLimitPerFeed, _articleLimitPerFeed);
     notifyListeners();
+  }
+
+  Future<void> setAutoTranslate(bool val) async {
+    _autoTranslate = val;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoTranslate, _autoTranslate);
   }
   static const _kTranslateLangKey = 'translate_lang_code';
   // Codes: 'off', 'en', 'ms', 'zh-CN', 'zh-TW', 'ja', 'ko', 'id', 'th', 'vi',

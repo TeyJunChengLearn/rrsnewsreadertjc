@@ -11,7 +11,11 @@
       "Bash(flutter run:*)",
       "Bash(adb logcat:*)",
       "Bash(cat:*)",
-      "Bash(flutter pub run workmanager --help:*)"
+      "Bash(flutter pub run workmanager --help:*)",
+      "Bash(ls:*)",
+      "Bash(identify:*)",
+      "Bash(find:*)",
+      "Bash(flutter pub run:*)"
     ],
     "deny": [],
     "ask": []

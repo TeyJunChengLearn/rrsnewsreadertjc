@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
 import 'android_webview_extractor.dart';
+import 'paragraph_extractor.dart';
 
 /// Result of article extraction
 class ArticleReadabilityResult {
@@ -16,6 +17,7 @@ class ArticleReadabilityResult {
   final String? source;
   final String? author;
   final DateTime? publishedDate;
+  final List<String>? paragraphs;
 
   const ArticleReadabilityResult({
     this.mainText,
@@ -25,6 +27,7 @@ class ArticleReadabilityResult {
     this.source,
     this.author,
     this.publishedDate,
+    this.paragraphs,
   });
 
   bool get hasContent =>
@@ -42,6 +45,7 @@ class ArticleReadabilityResult {
     return 'ArticleReadabilityResult{'
         'title: $pageTitle, '
         'textLength: ${mainText?.length ?? 0}, '
+        'paragraphCount: ${paragraphs?.length ?? 0}, '
         'source: $source}';
   }
 }
@@ -267,7 +271,21 @@ class RssFeedParser {
   }
 
   String _normalizeWhitespace(String input) {
-    return input.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // For RSS: preserve paragraph breaks (\n\n) while normalizing whitespace within lines
+    // Split by double newlines (paragraph separators)
+    final paragraphs = input.split('\n\n');
+    final normalized = <String>[];
+
+    for (final para in paragraphs) {
+      // Normalize whitespace within each paragraph (collapse spaces, remove single newlines)
+      final cleaned = para.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (cleaned.isNotEmpty) {
+        normalized.add(cleaned);
+      }
+    }
+
+    // Rejoin paragraphs with double newlines
+    return normalized.join('\n\n');
   }
 }
 
@@ -411,18 +429,19 @@ class Readability4JExtended {
       final articleRoot = _findArticleRoot(doc);
       if (articleRoot == null) return null;
 
-      final content = _extractMainText(articleRoot);
-      final normalizedContent = _normalizeWhitespace(content);
+      final (content, paragraphs) = _extractMainText(articleRoot);
+      // ParagraphExtractor already normalizes each paragraph, no need to normalize again
 
-      if (normalizedContent.isEmpty) return null;
+      if (content.isEmpty) return null;
 
       return ArticleReadabilityResult(
-        mainText: normalizedContent,
+        mainText: content,
         imageUrl: heroImage,
         pageTitle: title,
         source: 'HTML',
         author: author,
         publishedDate: publishedDate,
+        paragraphs: paragraphs,
       );
     } catch (_) {
       return null;
@@ -596,17 +615,31 @@ class Readability4JExtended {
     return null;
   }
 
-  /// Clean document
+  /// Clean document - removes structural noise only
+  /// Uses structural filtering instead of keyword-based filtering
   void _cleanDocument(dom.Document doc) {
-    // Remove noise elements
+    // Remove structural noise elements (not content)
     final garbage = doc.querySelectorAll(
       'style,script,noscript,form,iframe,video,audio,svg,canvas,'
-      'header,footer,nav,aside,.sidebar,.advertisement,.ad,'
-      '.comments,.social-share,.related-posts',
+      'header,footer,nav,aside',
     );
     for (final node in garbage) {
       node.remove();
     }
+
+    // Remove h1 tags (title is already captured separately in metadata)
+    doc.querySelectorAll('h1').forEach((h1) => h1.remove());
+
+    // Clean up image attributes for responsive display
+    for (final img in doc.querySelectorAll('img')) {
+      img.attributes.remove('width');
+      img.attributes.remove('height');
+      img.attributes.remove('sizes');
+      img.attributes.remove('srcset');
+    }
+
+    // Note: Removed hard-coded keyword filtering for "related", "recommended", etc.
+    // The new ParagraphExtractor uses density-based filtering instead
   }
 
   /// Extract JSON-LD content
@@ -741,29 +774,17 @@ class Readability4JExtended {
     return score.toInt();
   }
 
-  /// Extract main text
-  String _extractMainText(dom.Element root) {
-    final buffer = StringBuffer();
-    final seenTexts = <String>{};
+  /// Extract main text using improved density-based filtering
+  /// Returns both text and paragraphs list
+  (String text, List<String> paragraphs) _extractMainText(dom.Element root) {
+    // Use new ParagraphExtractor with density-based filtering
+    final html = root.outerHtml ?? '';
+    final paragraphs = ParagraphExtractor.extractParagraphLines(html);
 
-    final blocks = root.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li');
+    // Join paragraphs with double newline for backward compatibility
+    final text = paragraphs.join('\n\n');
 
-    for (final block in blocks) {
-      final text = block.text?.trim() ?? '';
-      if (text.isEmpty || text.length < 20) continue;
-      if (seenTexts.contains(text)) continue;
-
-      seenTexts.add(text);
-
-      if (block.localName?.startsWith('h') ?? false) {
-        buffer.writeln('\n$text\n');
-      } else {
-        buffer.writeln(text);
-        buffer.writeln();
-      }
-    }
-
-    return buffer.toString();
+    return (text, paragraphs);
   }
 
   /// Extract hero image
@@ -848,6 +869,28 @@ class Readability4JExtended {
     return results;
   }
 
+  /// Extract paragraphs from HTML using density-based filtering
+  ///
+  /// Returns List of String where each element is one paragraph.
+  /// Use with compute() for better performance:
+  /// ```dart
+  /// final result = await readability.extractMainContent(url);
+  /// if (result?.paragraphs != null) {
+  ///   // Use result.paragraphs directly
+  /// }
+  /// ```
+  ///
+  /// Or extract from raw HTML:
+  /// ```dart
+  /// final paragraphs = await compute(
+  ///   ParagraphExtractor.extractParagraphLines,
+  ///   htmlString,
+  /// );
+  /// ```
+  static Future<List<String>> extractParagraphsFromHtml(String html) async {
+    return ParagraphExtractor.extractParagraphLines(html);
+  }
+
   /// Extract from existing HTML
   Future<ArticleReadabilityResult?> extractFromHtml(
     String url,
@@ -880,18 +923,19 @@ class Readability4JExtended {
       final articleRoot = _findArticleRoot(doc);
       if (articleRoot == null) return null;
 
-      final content = _extractMainText(articleRoot);
-      final normalizedContent = _normalizeWhitespace(content);
+      final (content, paragraphs) = _extractMainText(articleRoot);
+      // ParagraphExtractor already normalizes each paragraph, no need to normalize again
 
-      if (normalizedContent.isEmpty) return null;
+      if (content.isEmpty) return null;
 
       return ArticleReadabilityResult(
-        mainText: normalizedContent,
+        mainText: content,
         imageUrl: heroImage,
         pageTitle: title,
         source: strategyName,
         author: author,
         publishedDate: publishedDate,
+        paragraphs: paragraphs,
       );
     } catch (_) {
       return null;

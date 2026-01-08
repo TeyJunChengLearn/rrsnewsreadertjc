@@ -621,6 +621,7 @@ class _ArticleRow extends StatelessWidget {
     final isBookmarked = currentItem.isBookmarked;
     final bool isReadLike = currentItem.isRead >= 1; // 1 and 2 both count as "read"
     final bool hasMainArticle = (currentItem.mainText ?? '').isNotEmpty;
+    final bool hasFailed = currentItem.enrichmentAttempts >= 5;
 
     final Color unreadTitleColor = Theme.of(context).colorScheme.onSurface;
     final Color readTitleColor = Colors.grey.shade600;
@@ -638,8 +639,11 @@ class _ArticleRow extends StatelessWidget {
     final thumbUrl = currentItem.imageUrl ?? '';
     final url =
         currentItem.link; // if your model uses String?, make it `item.link ?? ''`
-    final Color accentRing =
-        hasMainArticle ? Colors.green : Colors.grey.shade400;
+    final Color accentRing = hasFailed
+        ? Colors.red
+        : hasMainArticle
+            ? Colors.green
+            : Colors.grey.shade400;
     Widget _greyscaleIfMissingContent(Widget child) {
       if (hasMainArticle) return child;
       // Desaturate thumbnail when Readability could not fetch content
@@ -782,6 +786,24 @@ class _ArticleRow extends StatelessWidget {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
+                                      // Only show "Mark as unread" if article is already read
+                                      if (currentItem.isRead >= 1)
+                                        ListTile(
+                                          leading: const Icon(Icons.mark_email_unread),
+                                          title: const Text('Mark as unread'),
+                                          subtitle: const Text(
+                                              'Mark this article as unread to listen/read later'),
+                                          onTap: () {
+                                            Navigator.of(ctx).pop();
+                                            rss.markUnread(currentItem);
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                  content: Text(
+                                                      'Article marked as unread')),
+                                            );
+                                          },
+                                        ),
                                       ListTile(
                                         leading: const Icon(Icons.share),
                                         title: const Text('Share this article'),
@@ -862,7 +884,7 @@ class _ArticleRow extends StatelessWidget {
                     ),
                   ),
 
-                  // NEW: Badge indicator (only show if content extracted)
+                  // Badge indicator - green check for success, red X for failure
                   if (hasMainArticle)
                     Positioned(
                       right: 0,
@@ -877,6 +899,25 @@ class _ArticleRow extends StatelessWidget {
                         ),
                         child: const Icon(
                           Icons.check,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    )
+                  else if (hasFailed)
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(
+                          Icons.close,
                           color: Colors.white,
                           size: 16,
                         ),

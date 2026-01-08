@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../models/feed_item.dart';
 import '../models/feed_source.dart';
@@ -160,7 +161,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
         ..clear()
         ..addAll(merged);
 
-      _scheduleBackgroundBackfill();
+      _restartBackfillWithNewPriority();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -193,7 +194,7 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
       _items
         ..clear()
         ..addAll(merged);
-_scheduleBackgroundBackfill();
+      _restartBackfillWithNewPriority();
     } catch (e) {
       _error = '$e';
     } finally {
@@ -244,6 +245,10 @@ _scheduleBackgroundBackfill();
 
     await repo.setRead(item.id, read);
   }
+
+  Future<void> markUnread(FeedItem item) async {
+    await markRead(item, read: 0);
+  }
   Future<void> hideOlderThan(FeedItem item) async {
     final cutoff = item.pubDate;
     if (cutoff == null) return;
@@ -266,6 +271,9 @@ _scheduleBackgroundBackfill();
   }
 bool _backfillInProgress = false;
 bool _shouldCancelBackfill = false;
+bool _needsRestart = false;
+int _retryCount = 0;
+static const int _maxRetries = 3; // Maximum retry attempts
 
  void _scheduleBackgroundBackfill() {
     unawaited(Future.microtask(backfillArticleContent));
@@ -273,17 +281,28 @@ bool _shouldCancelBackfill = false;
 
   void _restartBackfillWithNewPriority() {
     if (_backfillInProgress) {
-      // Signal current backfill to stop
+      // Signal current backfill to stop and restart
       _shouldCancelBackfill = true;
+      _needsRestart = true;
       debugPrint('RssProvider: Signaling enrichment to restart with new priority');
+    } else {
+      // Not running, start immediately
+      _scheduleBackgroundBackfill();
     }
-    // Schedule new backfill (will start after current one stops)
-    _scheduleBackgroundBackfill();
   }
   Future<void> backfillArticleContent() async {
     if (_backfillInProgress) return;
     _backfillInProgress = true;
     _shouldCancelBackfill = false;
+
+    // Enable wakelock to prevent screen from turning off during enrichment
+    try {
+      await WakelockPlus.enable();
+      debugPrint('RssProvider: 🔒 WakeLock enabled - screen will stay on during enrichment');
+    } catch (e) {
+      debugPrint('RssProvider: ⚠️ Failed to enable WakeLock: $e');
+    }
+
     try {
       debugPrint('RssProvider: Starting background article enrichment for ${_items.length} items (one-by-one updates)');
 
@@ -292,16 +311,17 @@ bool _shouldCancelBackfill = false;
 
       // FIRST: Filter to only items that need enrichment
       final itemsNeedingEnrichment = _items.where((item) {
+        // Skip if no link
         if (item.link.isEmpty) return false;
+
+        // Skip if mainText already captured
         final existingText = (item.mainText ?? '').trim();
+        if (existingText.isNotEmpty) return false;
 
-        // Only skip if article has SUBSTANTIAL content (500+ chars)
-        // This prevents skipping articles with short RSS descriptions
-        final hasSubstantialContent = existingText.length >= 500;
-        final hasImage = (item.imageUrl ?? '').trim().isNotEmpty;
+        // Skip if already failed 5 times
+        if (item.enrichmentAttempts >= 5) return false;
 
-        // Enrich if missing substantial content OR missing image
-        return !hasSubstantialContent || !hasImage;
+        return true;
       }).toList();
 
       debugPrint('RssProvider: ${itemsNeedingEnrichment.length} of ${_items.length} articles need enrichment');
@@ -356,39 +376,132 @@ bool _shouldCancelBackfill = false;
 
         processedCount++;
 
-        // Enrich this article (already filtered, no need to check again)
+        // Enrich this article
         try {
           debugPrint('RssProvider: [$processedCount/${sortedItems.length}] 📖 NOW ENRICHING: "${item.title}" (Date: ${item.pubDate})');
           final content = await repo.populateArticleContent([item]);
 
+          // Check cancellation after network call
+          if (_shouldCancelBackfill) {
+            debugPrint('RssProvider: Enrichment cancelled during network call');
+            break;
+          }
+
           if (content.isNotEmpty && content.containsKey(item.id)) {
-            // Find the item in the original list and update it
+            final extractedMainText = content[item.id]!.mainText;
+            final extractedImageUrl = content[item.id]!.imageUrl;
+
+            // Check if extraction succeeded
+            if (extractedMainText != null && extractedMainText.trim().isNotEmpty) {
+              // Success - update with content
+              final idx = _items.indexWhere((e) => e.id == item.id);
+              if (idx != -1) {
+                _items[idx] = _items[idx].copyWith(
+                  mainText: extractedMainText,
+                  imageUrl: extractedImageUrl ?? _items[idx].imageUrl,
+                );
+                enrichedCount++;
+
+                // Update UI immediately after each article is enriched
+                debugPrint('RssProvider: ✓ Article $enrichedCount enriched - updating UI now!');
+                notifyListeners();
+
+                // Small delay to make the progressive update visible
+                await Future.delayed(const Duration(milliseconds: 100));
+              }
+            } else {
+              // Failed to extract content - increment attempts
+              debugPrint('RssProvider: ⚠ Article $processedCount failed to extract content');
+              await repo.incrementEnrichmentAttempts(item.id);
+
+              // Update local item with incremented attempts
+              final idx = _items.indexWhere((e) => e.id == item.id);
+              if (idx != -1) {
+                _items[idx] = _items[idx].copyWith(
+                  enrichmentAttempts: _items[idx].enrichmentAttempts + 1,
+                );
+                notifyListeners();
+              }
+            }
+          } else {
+            // Failed - increment attempts
+            debugPrint('RssProvider: ⚠ Article $processedCount failed to enrich');
+            await repo.incrementEnrichmentAttempts(item.id);
+
+            // Update local item with incremented attempts
             final idx = _items.indexWhere((e) => e.id == item.id);
             if (idx != -1) {
               _items[idx] = _items[idx].copyWith(
-                mainText: content[item.id]!.mainText ?? _items[idx].mainText,
-                imageUrl: content[item.id]!.imageUrl ?? _items[idx].imageUrl,
+                enrichmentAttempts: _items[idx].enrichmentAttempts + 1,
               );
-              enrichedCount++;
-
-              // Update UI immediately after each article is enriched
-              debugPrint('RssProvider: ✓ Article $enrichedCount enriched - updating UI now!');
               notifyListeners();
-
-              // Small delay to make the progressive update visible
-              await Future.delayed(const Duration(milliseconds: 150));
             }
-          } else {
-            debugPrint('RssProvider: ⚠ Article $processedCount failed to enrich');
           }
         } catch (e) {
           debugPrint('RssProvider: ✗ Error enriching article $processedCount: $e');
+          // Increment attempts on error too
+          await repo.incrementEnrichmentAttempts(item.id);
+
+          // Update local item with incremented attempts
+          final idx = _items.indexWhere((e) => e.id == item.id);
+          if (idx != -1) {
+            _items[idx] = _items[idx].copyWith(
+              enrichmentAttempts: _items[idx].enrichmentAttempts + 1,
+            );
+            notifyListeners();
+          }
         }
       }
 
       debugPrint('RssProvider: ✓ All done! Enriched $enrichedCount of $processedCount articles');
+
+      // Check if there are still articles needing enrichment
+      final stillNeedEnrichment = _items.where((item) {
+        if (item.link.isEmpty) return false;
+        final existingText = (item.mainText ?? '').trim();
+        if (existingText.isNotEmpty) return false;
+        if (item.enrichmentAttempts >= 5) return false;
+        return true;
+      }).length;
+
+      if (stillNeedEnrichment > 0 && _retryCount < _maxRetries) {
+        _retryCount++;
+        debugPrint('RssProvider: 🔄 $stillNeedEnrichment articles still need enrichment. Retry attempt $_retryCount/$_maxRetries');
+        // Schedule retry after a short delay
+        await Future.delayed(const Duration(seconds: 2));
+        if (!_shouldCancelBackfill) {
+          debugPrint('RssProvider: 🔄 Starting retry enrichment...');
+          _backfillInProgress = false; // Reset flag to allow retry
+          _scheduleBackgroundBackfill();
+          return; // Don't disable WakeLock yet, continuing enrichment
+        }
+      } else if (stillNeedEnrichment > 0) {
+        debugPrint('RssProvider: ⚠️ $stillNeedEnrichment articles still need enrichment but max retries reached');
+      } else {
+        debugPrint('RssProvider: ✅ All articles enriched successfully!');
+      }
+
+      // Reset retry count for next enrichment session
+      _retryCount = 0;
+
     } finally {
       _backfillInProgress = false;
+
+      // Disable wakelock when enrichment is done
+      try {
+        await WakelockPlus.disable();
+        debugPrint('RssProvider: 🔓 WakeLock disabled - screen can turn off now');
+      } catch (e) {
+        debugPrint('RssProvider: ⚠️ Failed to disable WakeLock: $e');
+      }
+
+      // If restart was requested while we were running, start a new enrichment
+      if (_needsRestart) {
+        _needsRestart = false;
+        _retryCount = 0; // Reset retry count for new session
+        debugPrint('RssProvider: Restarting enrichment with updated items');
+        _scheduleBackgroundBackfill();
+      }
     }
   }
   // ---------------------------------------------------------------------------
@@ -463,4 +576,16 @@ bool _shouldCancelBackfill = false;
   }
 }
 
+  @override
+  void dispose() {
+    // Cancel ongoing enrichment and release WakeLock when provider is disposed
+    _shouldCancelBackfill = true;
+
+    // Ensure WakeLock is released
+    WakelockPlus.disable().catchError((e) {
+      debugPrint('RssProvider: Failed to disable WakeLock on dispose: $e');
+    });
+
+    super.dispose();
+  }
 }

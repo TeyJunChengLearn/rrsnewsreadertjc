@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import '../models/feed_item.dart';
 import 'article_dao.dart';
 import 'readability_service.dart';
@@ -13,9 +12,11 @@ class ArticleContentService {
   /// Returns a map of article id -> extracted content for rows that were updated.
   ///
   /// Automatically detects paywalled sites and uses WebView extraction with delays.
+  /// Set allowWebView=false for background tasks where WebView is unavailable.
   Future<Map<String, ArticleReadabilityResult>> backfillMissingContent(
     List<FeedItem> items, {
     int defaultDelayMs = 2000,
+    bool allowWebView = true,
   }) async {
     final updated = <String, ArticleReadabilityResult>{};
 
@@ -28,7 +29,8 @@ class ArticleContentService {
       if (!needsBetterText && !needsImage) continue;
 
       // Auto-detect if this URL requires WebView extraction (paywalled sites)
-      final shouldUseWebView = _isPaywalledDomain(item.link);
+      // Only use WebView if allowed (not available in background tasks)
+      final shouldUseWebView = allowWebView && _isPaywalledDomain(item.link);
       final delayMs = shouldUseWebView ? defaultDelayMs : 0;
 
       final content = await readability.extractMainContent(

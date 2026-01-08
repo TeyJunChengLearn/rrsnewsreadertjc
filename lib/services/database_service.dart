@@ -13,7 +13,7 @@ class DatabaseService {
   factory DatabaseService() => _instance;
 
   static const _dbName = 'news_reader.db';
-  static const _dbVersion = 4;
+  static const _dbVersion = 5;
 
   Database? _db;
 
@@ -60,7 +60,8 @@ class DatabaseService {
         mainText TEXT,
         isRead INTEGER NOT NULL DEFAULT 0,
         isBookmarked INTEGER NOT NULL DEFAULT 0,
-        readingPosition INTEGER
+        readingPosition INTEGER,
+        enrichmentAttempts INTEGER NOT NULL DEFAULT 0
       )
     ''');
   }
@@ -76,6 +77,10 @@ class DatabaseService {
     if (oldVersion < 4) {
       // Add reading position tracking
       await db.execute('ALTER TABLE articles ADD COLUMN readingPosition INTEGER');
+    }
+    if (oldVersion < 5) {
+      // Add enrichment failure tracking
+      await db.execute('ALTER TABLE articles ADD COLUMN enrichmentAttempts INTEGER NOT NULL DEFAULT 0');
     }
   }
 }

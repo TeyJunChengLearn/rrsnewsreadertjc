@@ -379,11 +379,29 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
           ),
+
+          const SizedBox(height: 8),
+
+          SwitchListTile(
+            secondary: const Icon(Icons.auto_awesome),
+            title: const Text('Auto-translate'),
+            subtitle: Text(
+              d.autoTranslate
+                  ? 'Articles will auto-translate when opened'
+                  : 'Translate manually with Translate button',
+            ),
+            value: d.autoTranslate,
+            onChanged: translateCode == 'off'
+                ? null // Disable toggle if translation is off
+                : (v) => d.setAutoTranslate(v),
+          ),
+
           const Padding(
             padding: EdgeInsets.fromLTRB(0, 6, 0, 0),
             child: Text(
               'In article screen: tap Reader, then tap Translate to toggle between Translated and Original. '
-              'Text-to-speech will switch voice when available.',
+              'Text-to-speech will switch voice when available. '
+              'When auto-translate is ON, articles will translate automatically when opened or when TTS moves to next article.',
               style: TextStyle(color: Colors.black54),
             ),
           ),

@@ -170,4 +170,12 @@ class ArticleDao {
       whereArgs: [id],
     );
   }
+
+  Future<void> incrementEnrichmentAttempts(String id) async {
+    final db = await _dbService.database;
+    await db.rawUpdate(
+      'UPDATE articles SET enrichmentAttempts = enrichmentAttempts + 1 WHERE id = ?',
+      [id],
+    );
+  }
 }

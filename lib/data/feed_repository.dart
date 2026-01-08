@@ -169,4 +169,8 @@ class FeedRepository {
   Future<void> hideAllRead() async {
     await articleDao.hideAllRead();
   }
+
+  Future<void> incrementEnrichmentAttempts(String id) async {
+    await articleDao.incrementEnrichmentAttempts(id);
+  }
 }
