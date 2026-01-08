@@ -271,6 +271,8 @@ class _TtsState {
   bool notificationsInitialized = false;
   bool ttsInitialized = false;
   bool readerModeOn = false; // Remember reader mode state
+  bool autoTranslateEnabled = false;
+  String translateLangCode = 'off';
 
   // Article list for continuous reading
   List<FeedItem> allArticles = [];
@@ -814,7 +816,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       await _ensureLinesLoaded();
 
       // Auto-translate if enabled (after lines are loaded)
-      unawaited(_autoTranslateIfEnabled());
+      await _autoTranslateIfEnabled();
 
       final hasValidLine =
           _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length;
@@ -838,7 +840,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
     });
   }
- void _attachSettingsListener() {
+  void _attachSettingsListener() {
     // Apply speech rate immediately on init (synchronously)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -846,9 +848,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _settingsListener = () {
         // When settings change, apply immediately
         if (mounted) {
+          _ttsState.autoTranslateEnabled = _settings?.autoTranslate ?? false;
+          _ttsState.translateLangCode = _settings?.translateLangCode ?? 'off';
           unawaited(_applySpeechRateFromSettings());
         }
       };
+      _ttsState.autoTranslateEnabled = _settings?.autoTranslate ?? false;
+      _ttsState.translateLangCode = _settings?.translateLangCode ?? 'off';
       // Apply initial speech rate from settings
       unawaited(_applySpeechRateFromSettings());
       // Add listener for future changes
@@ -1641,18 +1647,25 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   /// Handle auto-translate for global TTS (background playback)
   /// This is called when loading next article during background TTS
   Future<void> _handleGlobalAutoTranslate(List<String> lines) async {
-    if (!mounted) return;
-
-    final settings = context.read<SettingsProvider>();
+    final bool autoTranslateEnabled;
+    final String translateLangCode;
+    if (mounted) {
+      final settings = context.read<SettingsProvider>();
+      autoTranslateEnabled = settings.autoTranslate;
+      translateLangCode = settings.translateLangCode;
+    } else {
+      autoTranslateEnabled = _ttsState.autoTranslateEnabled;
+      translateLangCode = _ttsState.translateLangCode;
+    }
 
     // Check if auto-translate is enabled AND translation language is set
-    if (!settings.autoTranslate || settings.translateLangCode == 'off') {
+    if (!autoTranslateEnabled || translateLangCode == 'off') {
       return;
     }
 
     if (lines.isEmpty) return;
 
-    final code = settings.translateLangCode;
+    final code = translateLangCode;
     final target = _translateLanguageFromCode(code);
     if (target == null) return;
 
