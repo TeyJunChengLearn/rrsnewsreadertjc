@@ -30,8 +30,8 @@ class ParagraphExtractor {
 
     final scored = <_BlockScore>[];
     for (final el in blocks) {
-      final text = _normalize(el.text);
-      if (text.length < 20) continue; // Skip very short blocks
+      final paragraphs = _extractParagraphs(el);
+      if (paragraphs.isEmpty) continue;
 
       // Calculate structural metrics
       final all = el.querySelectorAll('*');
@@ -41,21 +41,24 @@ class ParagraphExtractor {
       final aCount = links.length;
       final linkTextLen = _normalize(links.map((a) => a.text).join(' ')).length;
 
-      final textLen = text.length;
-      final linkDensity = textLen == 0 ? 1.0 : linkTextLen / textLen;
-      final textDensity = textLen / max(1, tagCount).toDouble();
+      for (final text in paragraphs) {
+        if (text.length < 20) continue; // Skip very short blocks
+        final textLen = text.length;
+        final linkDensity = textLen == 0 ? 1.0 : linkTextLen / textLen;
+        final textDensity = textLen / max(1, tagCount).toDouble();
 
-      scored.add(_BlockScore(
-        el: el,
-        text: text,
-        textLen: textLen,
-        tagCount: tagCount,
-        aCount: aCount,
-        linkTextLen: linkTextLen,
-        linkDensity: linkDensity,
-        textDensity: textDensity,
-        sentenceLike: _looksLikeSentence(text),
-      ));
+        scored.add(_BlockScore(
+          el: el,
+          text: text,
+          textLen: textLen,
+          tagCount: tagCount,
+          aCount: aCount,
+          linkTextLen: linkTextLen,
+          linkDensity: linkDensity,
+          textDensity: textDensity,
+          sentenceLike: _looksLikeSentence(text),
+        ));
+      }
     }
 
     if (scored.isEmpty) return const [];
@@ -90,6 +93,26 @@ class ParagraphExtractor {
 
   /// Normalize whitespace: replace multiple spaces/newlines with single space
   static String _normalize(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  static List<String> _extractParagraphs(dom.Element el) {
+    final html = el.innerHtml.replaceAll(RegExp(r'(?i)<br\\s*/?>'), '\n\n');
+    final text = hp.parseFragment(html).text;
+    final parts = text.split(RegExp(r'\\n\\s*\\n'));
+    final out = <String>[];
+    for (final part in parts) {
+      final cleaned = _normalize(part);
+      if (cleaned.isNotEmpty) {
+        out.add(cleaned);
+      }
+    }
+    if (out.isEmpty) {
+      final fallback = _normalize(el.text);
+      if (fallback.isNotEmpty) {
+        out.add(fallback);
+      }
+    }
+    return out;
+  }
 
   /// Detect if text looks like a sentence (vs labels/headings/navigation)
   static bool _looksLikeSentence(String s) {
