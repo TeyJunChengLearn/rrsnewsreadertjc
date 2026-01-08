@@ -350,6 +350,17 @@ Future<bool> _loadNextArticleGlobal() async {
   final nextIndex = state.currentArticleIndex + 1;
   if (nextIndex >= state.allArticles.length) return false;
 
+  if (state.rssProvider != null) {
+    final currentArticle = state.allArticles[state.currentArticleIndex];
+    if (currentArticle.isRead < 1) {
+      try {
+        state.rssProvider!.markRead(currentArticle, read: 1);
+      } catch (_) {
+        // Ignore errors
+      }
+    }
+  }
+
   final nextArticle = state.allArticles[nextIndex];
 
   // Try to load cached content from database
@@ -2410,8 +2421,24 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     return null;
   }
 
+  void _markCurrentArticleRead() {
+    if (widget.allArticles.isEmpty || widget.articleId == null) return;
+
+    final currentIndex = widget.allArticles.indexWhere(
+      (article) => article.id == widget.articleId,
+    );
+    if (currentIndex < 0) return;
+
+    final currentArticle = widget.allArticles[currentIndex];
+    if (currentArticle.isRead >= 1) return;
+
+    context.read<RssProvider>().markRead(currentArticle, read: 1);
+  }
+
   void _navigateToNextArticle() {
     if (!mounted || _disposed) return;
+
+    _markCurrentArticleRead();
 
     final nextArticle = _getNextArticle();
     if (nextArticle == null) return;
@@ -2435,6 +2462,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   void _goToPreviousArticle() {
     _cancelAutoAdvanceTimer();
     if (!mounted || _disposed) return;
+
+    _markCurrentArticleRead();
 
     final previousArticle = _getPreviousArticle();
 
@@ -2463,6 +2492,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   void _goToNextArticleNow() {
     _cancelAutoAdvanceTimer();
     if (!mounted || _disposed) return;
+
+    _markCurrentArticleRead();
 
     final nextArticle = _getNextArticle();
     if (nextArticle == null) return;
