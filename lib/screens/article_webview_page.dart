@@ -371,7 +371,7 @@ Future<bool> _loadNextArticleGlobal() async {
 
     // Group paragraphs into chunks for smoother TTS reading
     final chunkedLines = <String>[];
-    const chunkSize = 3; // Speak 3 paragraphs at a time
+    const chunkSize = 1; // Speak 1 paragraph at a time
     for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
       final end = (i + chunkSize).clamp(0, rawParagraphs.length);
       final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
@@ -1917,9 +1917,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Group paragraphs into chunks for smoother TTS reading
     // Instead of speaking each paragraph separately with long pauses,
-    // group 3-4 paragraphs together so TTS reads more continuously
+    // Speak each paragraph individually for better control
     final chunkedLines = <String>[];
-    const chunkSize = 3; // Speak 3 paragraphs at a time
+    const chunkSize = 1; // Speak 1 paragraph at a time
     for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
       final end = (i + chunkSize).clamp(0, rawParagraphs.length);
       final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
