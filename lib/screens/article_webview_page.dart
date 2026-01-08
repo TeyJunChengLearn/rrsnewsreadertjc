@@ -212,6 +212,25 @@ String _normalizeForTts(String text, String langCode) {
   return s;
 }
 
+const int _ttsParagraphsPerChunk = 2;
+
+List<String> _chunkParagraphsForTts(List<String> rawParagraphs) {
+  if (rawParagraphs.isEmpty) return [];
+
+  // Group paragraphs into chunks to reduce long pauses between sentences.
+  final chunkedLines = <String>[];
+  for (int i = 0; i < rawParagraphs.length; i += _ttsParagraphsPerChunk) {
+    final end = (i + _ttsParagraphsPerChunk).clamp(0, rawParagraphs.length);
+    final chunk = rawParagraphs.sublist(i, end).join(' ');
+    final trimmed = chunk.trim();
+    if (trimmed.isNotEmpty) {
+      chunkedLines.add(trimmed);
+    }
+  }
+
+  return chunkedLines;
+}
+
 // =================== Widget ===================
 
 class ArticleWebviewPage extends StatefulWidget {
@@ -380,14 +399,7 @@ Future<bool> _loadNextArticleGlobal() async {
         .where((e) => e.isNotEmpty)
         .toList();
 
-    // Group paragraphs into chunks for smoother TTS reading
-    final chunkedLines = <String>[];
-    const chunkSize = 1; // Speak 1 paragraph at a time
-    for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
-      final end = (i + chunkSize).clamp(0, rawParagraphs.length);
-      final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
-      chunkedLines.add(chunk);
-    }
+    final chunkedLines = _chunkParagraphsForTts(rawParagraphs);
 
     final combined = <String>[];
     final header = nextArticle.title.trim();
@@ -1930,16 +1942,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
             .where((e) => e.isNotEmpty)
             .toList();
 
-    // Group paragraphs into chunks for smoother TTS reading
-    // Instead of speaking each paragraph separately with long pauses,
-    // Speak each paragraph individually for better control
-    final chunkedLines = <String>[];
-    const chunkSize = 1; // Speak 1 paragraph at a time
-    for (int i = 0; i < rawParagraphs.length; i += chunkSize) {
-      final end = (i + chunkSize).clamp(0, rawParagraphs.length);
-      final chunk = rawParagraphs.sublist(i, end).join(' '); // Join with space for continuous reading
-      chunkedLines.add(chunk);
-    }
+    final chunkedLines = _chunkParagraphsForTts(rawParagraphs);
 
     // 👇 Build final lines list: optional header + article content
     final combined = <String>[];
