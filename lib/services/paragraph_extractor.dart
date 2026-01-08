@@ -95,23 +95,14 @@ class ParagraphExtractor {
   static String _normalize(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   static List<String> _extractParagraphs(dom.Element el) {
-    final html = el.innerHtml.replaceAll(RegExp(r'(?i)<br\\s*/?>'), '\n\n');
-    final text = hp.parseFragment(html).text;
-    final parts = text.split(RegExp(r'\\n\\s*\\n'));
-    final out = <String>[];
-    for (final part in parts) {
-      final cleaned = _normalize(part);
-      if (cleaned.isNotEmpty) {
-        out.add(cleaned);
-      }
+    // Treat each element as ONE paragraph (one line in database)
+    // Don't split on <br> tags - normalize entire element to single line
+    final text = el.text;
+    final cleaned = _normalize(text);
+    if (cleaned.isNotEmpty) {
+      return [cleaned];  // Return as single paragraph
     }
-    if (out.isEmpty) {
-      final fallback = _normalize(el.text);
-      if (fallback.isNotEmpty) {
-        out.add(fallback);
-      }
-    }
-    return out;
+    return [];
   }
 
   /// Detect if text looks like a sentence (vs labels/headings/navigation)
