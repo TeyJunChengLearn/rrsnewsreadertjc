@@ -350,6 +350,17 @@ Future<bool> _loadNextArticleGlobal() async {
   final nextIndex = state.currentArticleIndex + 1;
   if (nextIndex >= state.allArticles.length) return false;
 
+  if (state.rssProvider != null) {
+    final currentArticle = state.allArticles[state.currentArticleIndex];
+    if (currentArticle.isRead < 1) {
+      try {
+        state.rssProvider!.markRead(currentArticle, read: 1);
+      } catch (_) {
+        // Ignore errors
+      }
+    }
+  }
+
   final nextArticle = state.allArticles[nextIndex];
 
   // Try to load cached content from database
