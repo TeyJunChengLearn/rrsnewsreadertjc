@@ -286,7 +286,7 @@ class _TtsState {
   void Function(String actionId)? widgetActionHandler;
 
   // Callback for widget-specific completion handling (highlighting, etc.)
-  Future<void> Function()? widgetCompletionHandler;
+  Future<bool> Function()? widgetCompletionHandler;
 
   // Callback for auto-translate (set by current widget instance)
   Future<void> Function(List<String> lines)? autoTranslateCallback;
@@ -559,6 +559,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   late final WebViewController _controller;
 
   bool _disposed = false;
+  bool _isForeground = true;
 
   bool _isLoading = true;
   bool _readerOn = false;
@@ -715,8 +716,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Try to use widget-specific completion handler first (includes highlighting)
       if (s.widgetCompletionHandler != null) {
         try {
-          await s.widgetCompletionHandler!();
-          return;
+          final handled = await s.widgetCompletionHandler!();
+          if (handled) {
+            return;
+          }
         } catch (_) {
           // Widget handler failed, fall back to global handler
         }
@@ -1014,13 +1017,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
-  Future<void> _handleWidgetCompletion() async {
+  Future<bool> _handleWidgetCompletion() async {
     // Widget-specific completion handler (called from global TTS completion handler)
     // This enables highlighting during continuous playback even after navigation
-    if (!mounted || _disposed) return;
+    if (!mounted || _disposed || !_isForeground) return false;
 
     // Call the instance method which includes highlighting
     await _speakNextLine(auto: true);
+    return true;
   }
 
   Future<void> _loadReaderContent() async {
@@ -2638,10 +2642,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     switch (state) {
       case AppLifecycleState.paused:
         // App going to background - save position
+        _isForeground = false;
         unawaited(_saveReadingPosition());
         break;
       case AppLifecycleState.resumed:
         // App coming back to foreground - refresh notification and highlight
+        _isForeground = true;
         if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
           if (_isPlaying) {
             unawaited(_showReadingNotification(_lines[_currentLine]));
@@ -2660,6 +2666,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       case AppLifecycleState.inactive:
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
+        _isForeground = false;
         break;
     }
   }
