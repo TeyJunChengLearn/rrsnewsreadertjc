@@ -111,63 +111,22 @@ class ParagraphExtractor {
   }
 
   static String _extractTextWithBreaks(dom.Node node) {
-    const blockBreakTags = {
-      'p',
-      'div',
-      'section',
-      'article',
-      'header',
-      'footer',
-      'blockquote',
-      'li',
-      'td',
-      'th',
-      'figcaption',
-      'h1',
-      'h2',
-      'h3',
-      'h4',
-      'h5',
-      'h6',
-    };
     final buffer = StringBuffer();
-    void appendNewlineIfNeeded() {
-      if (buffer.isEmpty) return;
-      final lastChar = buffer.toString().codeUnitAt(buffer.length - 1);
-      if (lastChar != '\n'.codeUnitAt(0)) {
-        buffer.write('\n');
-      }
-    }
-
-    void walk(dom.Node current, {required bool isRoot}) {
+    void walk(dom.Node current) {
       if (current.nodeType == dom.Node.TEXT_NODE) {
         buffer.write(current.text);
         return;
       }
-      if (current is dom.Element) {
-        final tag = current.localName;
-        if (tag == 'br') {
-          appendNewlineIfNeeded();
-          return;
-        }
-        final isBlockBoundary = !isRoot && tag != null && blockBreakTags.contains(tag);
-        if (isBlockBoundary) {
-          appendNewlineIfNeeded();
-        }
-        for (final child in current.nodes) {
-          walk(child, isRoot: false);
-        }
-        if (isBlockBoundary) {
-          appendNewlineIfNeeded();
-        }
+      if (current is dom.Element && current.localName == 'br') {
+        buffer.write('\n');
         return;
       }
       for (final child in current.nodes) {
-        walk(child, isRoot: false);
+        walk(child);
       }
     }
 
-    walk(node, isRoot: true);
+    walk(node);
     return buffer.toString();
   }
 
