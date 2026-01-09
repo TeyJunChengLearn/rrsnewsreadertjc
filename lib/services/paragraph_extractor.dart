@@ -95,14 +95,80 @@ class ParagraphExtractor {
   static String _normalize(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   static List<String> _extractParagraphs(dom.Element el) {
-    // Treat each element as ONE paragraph (one line in database)
-    // Don't split on <br> tags - normalize entire element to single line
-    final text = el.text;
-    final cleaned = _normalize(text);
-    if (cleaned.isNotEmpty) {
-      return [cleaned];  // Return as single paragraph
+    // Treat each element as ONE paragraph unless it contains explicit line breaks.
+    // Preserve <br> line breaks to avoid collapsing multiple logical paragraphs
+    // into a single line.
+    final text = _extractTextWithBreaks(el).replaceAll('\r\n', '\n');
+    final parts = text.split(RegExp(r'\n+'));
+    final cleaned = <String>[];
+    for (final part in parts) {
+      final normalized = _normalize(part);
+      if (normalized.isNotEmpty) {
+        cleaned.add(normalized);
+      }
     }
-    return [];
+    return cleaned;
+  }
+
+  static String _extractTextWithBreaks(dom.Node node) {
+    const blockBreakTags = {
+      'p',
+      'div',
+      'section',
+      'article',
+      'header',
+      'footer',
+      'blockquote',
+      'li',
+      'td',
+      'th',
+      'figcaption',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+    };
+    final buffer = StringBuffer();
+    void appendNewlineIfNeeded() {
+      if (buffer.isEmpty) return;
+      final lastChar = buffer.toString().codeUnitAt(buffer.length - 1);
+      if (lastChar != '\n'.codeUnitAt(0)) {
+        buffer.write('\n');
+      }
+    }
+
+    void walk(dom.Node current, {required bool isRoot}) {
+      if (current.nodeType == dom.Node.TEXT_NODE) {
+        buffer.write(current.text);
+        return;
+      }
+      if (current is dom.Element) {
+        final tag = current.localName;
+        if (tag == 'br') {
+          appendNewlineIfNeeded();
+          return;
+        }
+        final isBlockBoundary = !isRoot && tag != null && blockBreakTags.contains(tag);
+        if (isBlockBoundary) {
+          appendNewlineIfNeeded();
+        }
+        for (final child in current.nodes) {
+          walk(child, isRoot: false);
+        }
+        if (isBlockBoundary) {
+          appendNewlineIfNeeded();
+        }
+        return;
+      }
+      for (final child in current.nodes) {
+        walk(child, isRoot: false);
+      }
+    }
+
+    walk(node, isRoot: true);
+    return buffer.toString();
   }
 
   /// Detect if text looks like a sentence (vs labels/headings/navigation)
