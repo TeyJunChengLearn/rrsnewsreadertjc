@@ -212,25 +212,6 @@ String _normalizeForTts(String text, String langCode) {
   return s;
 }
 
-const int _ttsParagraphsPerChunk = 2;
-
-List<String> _chunkParagraphsForTts(List<String> rawParagraphs) {
-  if (rawParagraphs.isEmpty) return [];
-
-  // Group paragraphs into chunks to reduce long pauses between sentences.
-  final chunkedLines = <String>[];
-  for (int i = 0; i < rawParagraphs.length; i += _ttsParagraphsPerChunk) {
-    final end = (i + _ttsParagraphsPerChunk).clamp(0, rawParagraphs.length);
-    final chunk = rawParagraphs.sublist(i, end).join(' ');
-    final trimmed = chunk.trim();
-    if (trimmed.isNotEmpty) {
-      chunkedLines.add(trimmed);
-    }
-  }
-
-  return chunkedLines;
-}
-
 // =================== Widget ===================
 
 class ArticleWebviewPage extends StatefulWidget {
@@ -394,19 +375,17 @@ Future<bool> _loadNextArticleGlobal() async {
 
     // Build lines list: header + content
     final rawParagraphs = text
-        .split('\n\n')
+        .split(RegExp(r'\n+'))
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toList();
-
-    final chunkedLines = _chunkParagraphsForTts(rawParagraphs);
 
     final combined = <String>[];
     final header = nextArticle.title.trim();
     if (header.isNotEmpty) {
       combined.add(header);
     }
-    combined.addAll(chunkedLines);
+    combined.addAll(rawParagraphs);
 
     if (combined.isEmpty) return false;
 
@@ -1937,12 +1916,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final rawParagraphs = text.isEmpty
         ? <String>[]
         : text
-            .split('\n\n')
+            .split(RegExp(r'\n+'))
             .map((e) => e.trim())
             .where((e) => e.isNotEmpty)
             .toList();
-
-    final chunkedLines = _chunkParagraphsForTts(rawParagraphs);
 
     // 👇 Build final lines list: optional header + article content
     final combined = <String>[];
@@ -1953,7 +1930,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     if (header.isNotEmpty) {
       combined.add(header);
     }
-    combined.addAll(chunkedLines);
+    combined.addAll(rawParagraphs);
 
     _heroImageUrl ??= result?.imageUrl;
 
