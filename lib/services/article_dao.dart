@@ -231,7 +231,7 @@ class ArticleDao {
         whereArgs: ids,
       );
       final results = await batch.commit();
-      return results.whereType<int>().fold(0, (sum, value) => sum + value);
+      return results.whereType<int>().fold<int>(0, (sum, value) => sum + value);
     });
   }
 
