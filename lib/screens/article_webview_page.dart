@@ -321,6 +321,11 @@ Future<void> toggleGlobalTts() async {
   }
 }
 
+/// Apply speech rate to the global TTS instance (for background playback updates).
+Future<void> applyGlobalTtsSpeechRate(double rate) async {
+  await _globalTts.setSpeechRate(rate);
+}
+
 // ============ End Public TTS Control API ============
 
 // Global state for background playback
