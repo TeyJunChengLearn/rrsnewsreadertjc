@@ -46,6 +46,7 @@ class ParagraphExtractor {
         final textLen = text.length;
         final linkDensity = textLen == 0 ? 1.0 : linkTextLen / textLen;
         final textDensity = textLen / max(1, tagCount).toDouble();
+        final tagName = el.localName ?? '';
 
         scored.add(_BlockScore(
           el: el,
@@ -55,8 +56,10 @@ class ParagraphExtractor {
           aCount: aCount,
           linkTextLen: linkTextLen,
           linkDensity: linkDensity,
+          anchorTextRatio: linkDensity,
           textDensity: textDensity,
           sentenceLike: _looksLikeSentence(text),
+          tagName: tagName,
         ));
       }
     }
@@ -75,6 +78,14 @@ class ParagraphExtractor {
           (b.aCount >= 3 && b.textLen < 120) ||
           (b.aCount >= 5 && b.textLen < 250);
 
+      // Filter: List items that are mostly links (related/news lists)
+      final listyLinks = (b.tagName == 'li') &&
+          (b.aCount >= 1) &&
+          (b.anchorTextRatio > 0.12 || b.textLen < 180);
+
+      // Filter: Blocks where anchor text dominates the paragraph
+      final anchorHeavy = (b.anchorTextRatio > 0.25 && b.textLen < 260);
+
       // Filter: Low text density = widget/sidebar/structured layout
       final tooLowTextDensity = (b.textDensity < 3.0 && b.textLen < medianTextLen) ||
           (b.tagCount > 25 && b.textLen < 120);
@@ -82,7 +93,7 @@ class ParagraphExtractor {
       // Filter: Not sentence-like = labels/headings/junk
       final notSentence = (!b.sentenceLike && b.textLen < 80);
 
-      if (tooManyLinks || tooLowTextDensity || notSentence) continue;
+      if (tooManyLinks || listyLinks || anchorHeavy || tooLowTextDensity || notSentence) continue;
 
       kept.add(b.text);
     }
@@ -218,8 +229,10 @@ class _BlockScore {
   final int aCount;
   final int linkTextLen;
   final double linkDensity;
+  final double anchorTextRatio;
   final double textDensity;
   final bool sentenceLike;
+  final String tagName;
 
   _BlockScore({
     required this.el,
@@ -229,7 +242,9 @@ class _BlockScore {
     required this.aCount,
     required this.linkTextLen,
     required this.linkDensity,
+    required this.anchorTextRatio,
     required this.textDensity,
     required this.sentenceLike,
+    required this.tagName,
   });
 }
