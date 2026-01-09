@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/settings_provider.dart';
 import '../providers/rss_provider.dart';
+import 'article_webview_page.dart';
 import 'cookie_diagnostic_page.dart';
 import '../services/local_backup_service.dart';
 import '../models/backup_data.dart';
@@ -314,6 +315,7 @@ class SettingsPage extends StatelessWidget {
                                         // Properly await the async call
                                         try {
                                           await d.setTtsSpeechRate(temp);
+                                          await applyGlobalTtsSpeechRate(temp);
                                         } catch (e) {
                                           // Silently handle error
                                         }
