@@ -95,14 +95,39 @@ class ParagraphExtractor {
   static String _normalize(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
 
   static List<String> _extractParagraphs(dom.Element el) {
-    // Treat each element as ONE paragraph (one line in database)
-    // Don't split on <br> tags - normalize entire element to single line
-    final text = el.text;
-    final cleaned = _normalize(text);
-    if (cleaned.isNotEmpty) {
-      return [cleaned];  // Return as single paragraph
+    // Treat each element as ONE paragraph unless it contains explicit line breaks.
+    // Preserve <br> line breaks to avoid collapsing multiple logical paragraphs
+    // into a single line.
+    final text = _extractTextWithBreaks(el).replaceAll('\r\n', '\n');
+    final parts = text.split(RegExp(r'\n+'));
+    final cleaned = <String>[];
+    for (final part in parts) {
+      final normalized = _normalize(part);
+      if (normalized.isNotEmpty) {
+        cleaned.add(normalized);
+      }
     }
-    return [];
+    return cleaned;
+  }
+
+  static String _extractTextWithBreaks(dom.Node node) {
+    final buffer = StringBuffer();
+    void walk(dom.Node current) {
+      if (current.nodeType == dom.Node.TEXT_NODE) {
+        buffer.write(current.text);
+        return;
+      }
+      if (current is dom.Element && current.localName == 'br') {
+        buffer.write('\n');
+        return;
+      }
+      for (final child in current.nodes) {
+        walk(child);
+      }
+    }
+
+    walk(node);
+    return buffer.toString();
   }
 
   /// Detect if text looks like a sentence (vs labels/headings/navigation)
