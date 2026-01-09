@@ -10,7 +10,7 @@ import '../models/feed_item.dart';
 import '../providers/rss_provider.dart';
 import '../providers/settings_provider.dart';
 
-import 'article_webview_page.dart' show ArticleWebviewPage, isGlobalTtsPlaying, getGlobalTtsArticleTitle, getGlobalTtsArticleId, getGlobalTtsProgress, stopGlobalTts, toggleGlobalTts;
+import 'article_webview_page.dart' show ArticleWebviewPage, isGlobalTtsPlaying, getGlobalTtsArticleTitle, getGlobalTtsArticleId, getGlobalTtsProgress, stopGlobalTts, stopGlobalTtsForArticle, toggleGlobalTts;
 import 'feed_page.dart';
 import 'news_search_page.dart';
 import 'settings_page.dart';
@@ -1094,6 +1094,7 @@ class _ArticleRow extends StatelessWidget {
                                             'Move to trash. Can be restored or permanently deleted later.'),
                                         onTap: () async {
                                           Navigator.of(ctx).pop();
+                                          await stopGlobalTtsForArticle(currentItem.id);
                                           await rss.hideArticle(currentItem);
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context)

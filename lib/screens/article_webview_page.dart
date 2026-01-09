@@ -288,6 +288,20 @@ Future<void> stopGlobalTts() async {
   await _globalNotifications.cancel(0); // Cancel reading notification
 }
 
+/// Stop TTS playback if the provided article is currently being read.
+Future<void> stopGlobalTtsForArticle(String articleId) async {
+  final state = _TtsState.instance;
+  if (articleId.isEmpty || state.articleId != articleId) return;
+
+  state.isPlaying = false;
+  state.currentLine = 0;
+  state.lines = [];
+  state.articleId = '';
+  state.articleTitle = '';
+  await _globalTts.stop();
+  await _globalNotifications.cancel(0); // Cancel reading notification
+}
+
 /// Pause/Resume TTS playback
 Future<void> toggleGlobalTts() async {
   final state = _TtsState.instance;
