@@ -173,4 +173,39 @@ class FeedRepository {
   Future<void> incrementEnrichmentAttempts(String id) async {
     await articleDao.incrementEnrichmentAttempts(id);
   }
+
+  // ---------------------------------------------------------------------------
+  // TRASH MANAGEMENT
+  // ---------------------------------------------------------------------------
+  Future<void> updateReadStatus(String id, int isRead) async {
+    await articleDao.updateReadStatus(id, isRead);
+  }
+
+  Future<List<FeedItem>> getHiddenArticles() async {
+    return await articleDao.getHiddenArticles();
+  }
+
+  Future<void> restoreFromTrash(String id) async {
+    await articleDao.restoreFromTrash(id);
+  }
+
+  Future<void> restoreMultipleFromTrash(List<String> ids) async {
+    await articleDao.restoreMultipleFromTrash(ids);
+  }
+
+  Future<void> permanentlyDeleteById(String id) async {
+    await articleDao.permanentlyDeleteById(id);
+  }
+
+  Future<void> permanentlyDeleteByIds(List<String> ids) async {
+    await articleDao.permanentlyDeleteByIds(ids);
+  }
+
+  Future<void> permanentlyDeleteAllHidden() async {
+    await articleDao.permanentlyDeleteAllHidden();
+  }
+
+  Future<FeedItem?> findById(String id) async {
+    return await articleDao.findById(id);
+  }
 }

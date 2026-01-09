@@ -1,4 +1,6 @@
 // lib/screens/news_page.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -8,10 +10,11 @@ import '../models/feed_item.dart';
 import '../providers/rss_provider.dart';
 import '../providers/settings_provider.dart';
 
-import 'article_webview_page.dart';
+import 'article_webview_page.dart' show ArticleWebviewPage, isGlobalTtsPlaying, getGlobalTtsArticleTitle, getGlobalTtsArticleId, getGlobalTtsProgress, stopGlobalTts, toggleGlobalTts;
 import 'feed_page.dart';
 import 'news_search_page.dart';
 import 'settings_page.dart';
+import 'trash_page.dart';
 
 // Local-only filter state (does NOT modify provider)
 enum _LocalReadFilter { all, unreadOnly, readOnly }
@@ -30,25 +33,68 @@ class _NewsPageState extends State<NewsPage> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   static const _kSortOrderKey = 'news_sort_order';
+
+  // TTS state tracking
+  Timer? _ttsCheckTimer;
+  bool _isTtsPlaying = false;
+  String _ttsArticleTitle = '';
+  String _ttsProgress = '';
+
   @override
   void initState() {
     super.initState();
     _loadSavedSortOrder();
+    _startTtsStateCheck();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<RssProvider>().backfillArticleContent();
     });
   }
 
+  @override
+  void dispose() {
+    _ttsCheckTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startTtsStateCheck() {
+    // Check immediately after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updateTtsState();
+    });
+
+    // Then check periodically to update UI
+    _ttsCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      _updateTtsState();
+    });
+  }
+
+  void _updateTtsState() {
+    if (!mounted) return;
+    final playing = isGlobalTtsPlaying();
+    final title = getGlobalTtsArticleTitle();
+    final progress = getGlobalTtsProgress();
+
+    if (playing != _isTtsPlaying || title != _ttsArticleTitle || progress != _ttsProgress) {
+      setState(() {
+        _isTtsPlaying = playing;
+        _ttsArticleTitle = title;
+        _ttsProgress = progress;
+      });
+    }
+  }
+
   // Local filter state (defaults = show all)
   _LocalReadFilter _readFilter = _LocalReadFilter.all;
   _LocalBookmarkFilter _bmFilter = _LocalBookmarkFilter.all;
   _LocalSortOrder _sortOrder = _LocalSortOrder.latestFirst;
+  String? _selectedSourceTitle; // null = all feeds, otherwise filter by this source title
 
   bool get _hasActiveFilter =>
       _readFilter != _LocalReadFilter.all ||
       _bmFilter != _LocalBookmarkFilter.all ||
-      _sortOrder != _LocalSortOrder.latestFirst;
+      _sortOrder != _LocalSortOrder.latestFirst ||
+      _selectedSourceTitle != null;
 
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
@@ -160,6 +206,12 @@ class _NewsPageState extends State<NewsPage> {
         _bmFilter == _LocalBookmarkFilter.bookmarkedOnly;
     final bool unreadOnly = _readFilter == _LocalReadFilter.unreadOnly;
     final bool readOnly = _readFilter == _LocalReadFilter.readOnly;
+
+    // 0) Source filter - filter by selected feed/source
+    if (_selectedSourceTitle != null) {
+      list.retainWhere((e) => e.sourceTitle == _selectedSourceTitle);
+    }
+
     // 1) Hide rc==2 by default, BUT keep them if Read-only OR Bookmarked-only is active.
     if (!(bookmarkedOnly || readOnly)) {
       list.removeWhere((it) => _rcOf(it) == 2);
@@ -195,7 +247,10 @@ class _NewsPageState extends State<NewsPage> {
 
     return Scaffold(
       key: _scaffoldKey,
-      drawer: const _NewsDrawer(),
+      drawer: _NewsDrawer(
+        selectedSourceTitle: _selectedSourceTitle,
+        onSourceSelected: (title) => setState(() => _selectedSourceTitle = title),
+      ),
       appBar: AppBar(
         titleSpacing: 0,
         leading:
@@ -220,14 +275,16 @@ class _NewsPageState extends State<NewsPage> {
             // ---------- MAIN FEED ----------
             Row(
               children: [
-                Text(
-                  _hasActiveFilter ? 'All feeds (filtered)' : 'All feeds',
-                  style: Theme.of(context)
-                      .textTheme
-                      .headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.w600),
+                Expanded(
+                  child: Text(
+                    _selectedSourceTitle ?? (_hasActiveFilter ? 'All feeds (filtered)' : 'All feeds'),
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                const Spacer(),
                 if (_hasActiveFilter)
                   TextButton.icon(
                     onPressed: () {
@@ -235,6 +292,7 @@ class _NewsPageState extends State<NewsPage> {
                         _readFilter = _LocalReadFilter.all;
                         _bmFilter = _LocalBookmarkFilter.all;
                         _sortOrder = _LocalSortOrder.latestFirst;
+                        _selectedSourceTitle = null;
                       });
 
                       _persistSortOrder(_LocalSortOrder.latestFirst);
@@ -281,6 +339,145 @@ class _NewsPageState extends State<NewsPage> {
         shape: const StadiumBorder(),
         icon: const Icon(Icons.done_all),
         label: const Text('Hide read'),
+      ),
+      bottomNavigationBar: _isTtsPlaying || _ttsArticleTitle.isNotEmpty
+          ? _TtsControlBar(
+              isPlaying: _isTtsPlaying,
+              articleTitle: _ttsArticleTitle,
+              progress: _ttsProgress,
+              onPlayPause: () async {
+                await toggleGlobalTts();
+                setState(() {
+                  _isTtsPlaying = isGlobalTtsPlaying();
+                });
+              },
+              onStop: () async {
+                await stopGlobalTts();
+                setState(() {
+                  _isTtsPlaying = false;
+                  _ttsArticleTitle = '';
+                  _ttsProgress = '';
+                });
+              },
+              onTap: () {
+                // Navigate to the currently playing article
+                final articleId = getGlobalTtsArticleId();
+                if (articleId.isEmpty) return;
+
+                // Find the article in the list
+                final article = allFeeds.cast<FeedItem?>().firstWhere(
+                  (a) => a?.id == articleId,
+                  orElse: () => null,
+                );
+
+                if (article != null) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ArticleWebviewPage(
+                        articleId: article.id,
+                        url: article.link,
+                        title: article.title,
+                        initialMainText: article.mainText,
+                        initialImageUrl: article.imageUrl,
+                        allArticles: allFeeds,
+                        autoPlay: false, // Don't restart, TTS is already playing
+                      ),
+                    ),
+                  );
+                }
+              },
+            )
+          : null,
+    );
+  }
+}
+
+// ---------------- TTS Control Bar ----------------
+
+class _TtsControlBar extends StatelessWidget {
+  final bool isPlaying;
+  final String articleTitle;
+  final String progress;
+  final VoidCallback onPlayPause;
+  final VoidCallback onStop;
+  final VoidCallback onTap;
+
+  const _TtsControlBar({
+    required this.isPlaying,
+    required this.articleTitle,
+    required this.progress,
+    required this.onPlayPause,
+    required this.onStop,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Material(
+      elevation: 8,
+      color: isDark ? Colors.grey.shade900 : Colors.white,
+      child: SafeArea(
+        top: false,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                // Play/Pause button
+                IconButton(
+                  icon: Icon(
+                    isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                    size: 40,
+                    color: theme.colorScheme.primary,
+                  ),
+                  onPressed: onPlayPause,
+                ),
+                const SizedBox(width: 8),
+                // Article info
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        articleTitle.isNotEmpty ? articleTitle : 'Reading...',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (progress.isNotEmpty)
+                        Text(
+                          isPlaying ? 'Playing $progress' : 'Paused $progress',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // Stop button
+                IconButton(
+                  icon: Icon(
+                    Icons.stop_circle_outlined,
+                    size: 32,
+                    color: Colors.red.shade400,
+                  ),
+                  onPressed: onStop,
+                  tooltip: 'Stop reading',
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -482,7 +679,13 @@ class _FilterSheetState extends State<_FilterSheet> {
 // ---------------- Drawer ----------------
 
 class _NewsDrawer extends StatelessWidget {
-  const _NewsDrawer();
+  final String? selectedSourceTitle;
+  final void Function(String? sourceTitle) onSourceSelected;
+
+  const _NewsDrawer({
+    required this.selectedSourceTitle,
+    required this.onSourceSelected,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -508,18 +711,45 @@ class _NewsDrawer extends StatelessWidget {
                             fontSize: 18, fontWeight: FontWeight.w600)),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.folder_copy_outlined),
-                    title: const Text('All feeds'),
-                    onTap: () => Navigator.of(context).pop(),
+                    leading: Icon(
+                      Icons.folder_copy_outlined,
+                      color: selectedSourceTitle == null ? accent : null,
+                    ),
+                    title: Text(
+                      'All feeds',
+                      style: TextStyle(
+                        fontWeight: selectedSourceTitle == null
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: selectedSourceTitle == null ? accent : null,
+                      ),
+                    ),
+                    selected: selectedSourceTitle == null,
+                    onTap: () {
+                      onSourceSelected(null);
+                      Navigator.of(context).pop();
+                    },
                   ),
                   for (final source in rss.sources)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                      child: Text(
-                        source.title,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w500),
+                    ListTile(
+                      leading: Icon(
+                        Icons.rss_feed,
+                        color: selectedSourceTitle == source.title ? accent : null,
                       ),
+                      title: Text(
+                        source.title,
+                        style: TextStyle(
+                          fontWeight: selectedSourceTitle == source.title
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                          color: selectedSourceTitle == source.title ? accent : null,
+                        ),
+                      ),
+                      selected: selectedSourceTitle == source.title,
+                      onTap: () {
+                        onSourceSelected(source.title);
+                        Navigator.of(context).pop();
+                      },
                     ),
                   const SizedBox(height: 8),
                   ListTile(
@@ -532,6 +762,15 @@ class _NewsDrawer extends StatelessWidget {
                     },
                   ),
                   const Divider(height: 24, thickness: 1),
+                  ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('Trash'),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const TrashPage()));
+                    },
+                  ),
                   ListTile(
                     leading: const Icon(Icons.settings),
                     title: const Text('Settings'),
@@ -821,7 +1060,7 @@ class _ArticleRow extends StatelessWidget {
                                             const Icon(Icons.visibility_off),
                                         title: const Text(
                                             'Hide news before this time'),
-                                        subtitle: Text(
+                                        subtitle: const Text(
                                             'Mark older items as hidden so they disappear from the list.'),
                                         onTap: () async {
                                           Navigator.of(ctx).pop();
@@ -841,6 +1080,35 @@ class _ArticleRow extends StatelessWidget {
                                               SnackBar(
                                                   content: Text(
                                                       'Hidden news older than $agoLabel.')),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      ListTile(
+                                        leading: Icon(Icons.delete_outline,
+                                            color: Colors.red.shade400),
+                                        title: Text('Delete this article',
+                                            style: TextStyle(
+                                                color: Colors.red.shade400)),
+                                        subtitle: const Text(
+                                            'Move to trash. Can be restored or permanently deleted later.'),
+                                        onTap: () async {
+                                          Navigator.of(ctx).pop();
+                                          await rss.hideArticle(currentItem);
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: const Text(
+                                                    'Article moved to trash'),
+                                                action: SnackBarAction(
+                                                  label: 'Undo',
+                                                  onPressed: () async {
+                                                    await rss.restoreFromTrash(
+                                                        currentItem);
+                                                  },
+                                                ),
+                                              ),
                                             );
                                           }
                                         },

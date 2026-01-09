@@ -261,6 +261,50 @@ FlutterLocalNotificationsPlugin get _globalNotifications {
   return _globalNotificationsInstance!;
 }
 
+// ============ Public TTS Control API ============
+// These functions allow other pages to control background TTS playback
+
+/// Check if TTS is currently playing
+bool isGlobalTtsPlaying() => _TtsState.instance.isPlaying;
+
+/// Get the title of the article currently being read
+String getGlobalTtsArticleTitle() => _TtsState.instance.articleTitle;
+
+/// Get the ID of the article currently being read
+String getGlobalTtsArticleId() => _TtsState.instance.articleId;
+
+/// Get current reading progress as "line/total"
+String getGlobalTtsProgress() {
+  final state = _TtsState.instance;
+  if (state.lines.isEmpty) return '';
+  return '${state.currentLine + 1}/${state.lines.length}';
+}
+
+/// Stop TTS playback and clear notification
+Future<void> stopGlobalTts() async {
+  final state = _TtsState.instance;
+  state.isPlaying = false;
+  await _globalTts.stop();
+  await _globalNotifications.cancel(0); // Cancel reading notification
+}
+
+/// Pause/Resume TTS playback
+Future<void> toggleGlobalTts() async {
+  final state = _TtsState.instance;
+  if (state.isPlaying) {
+    state.isPlaying = false;
+    await _globalTts.stop();
+    // Update notification to show paused state
+    if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
+      unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+    }
+  } else {
+    await _speakCurrentLineGlobal();
+  }
+}
+
+// ============ End Public TTS Control API ============
+
 // Global state for background playback
 class _TtsState {
   List<String> lines = [];
@@ -837,7 +881,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
 
       // Auto-start playing if requested (e.g., from auto-advance)
-      if (widget.autoPlay && hasValidLine) {
+      // But don't restart if TTS is already playing (e.g., when syncing from background)
+      if (widget.autoPlay && hasValidLine && !_isPlaying) {
         await _speakCurrentLine();
       } else if (hasValidLine && !_isPlaying) {
         // If returning to a saved position (or starting fresh), show highlight
@@ -2675,8 +2720,35 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         unawaited(_saveReadingPosition());
         break;
       case AppLifecycleState.resumed:
-        // App coming back to foreground - refresh notification and highlight
+        // App coming back to foreground
         _isForeground = true;
+
+        // Check if TTS moved to a different article while in background
+        final globalArticleId = _ttsState.articleId;
+        final currentWidgetArticleId = widget.articleId ?? '';
+
+        if (globalArticleId.isNotEmpty &&
+            currentWidgetArticleId.isNotEmpty &&
+            globalArticleId != currentWidgetArticleId &&
+            _ttsState.isPlaying) {
+          // TTS has moved to a different article during background playback
+          // Navigate to the current article being read
+          _navigateToGlobalArticle();
+          return;
+        }
+
+        // Sync local state with global state if same article
+        if (globalArticleId == currentWidgetArticleId && _ttsState.lines.isNotEmpty) {
+          // Update local state to match global state
+          if (_ttsState.currentLine != _currentLine) {
+            setState(() {
+              _currentLine = _ttsState.currentLine;
+              _isPlaying = _ttsState.isPlaying;
+            });
+          }
+        }
+
+        // Refresh notification and highlight
         if (_lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
           if (_isPlaying) {
             unawaited(_showReadingNotification(_lines[_currentLine]));
@@ -2698,6 +2770,38 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         _isForeground = false;
         break;
     }
+  }
+
+  /// Navigate to the article currently being read by global TTS
+  void _navigateToGlobalArticle() {
+    if (!mounted || _disposed) return;
+
+    final globalArticleId = _ttsState.articleId;
+    if (globalArticleId.isEmpty) return;
+
+    // Find the article in the list
+    final articleIndex = widget.allArticles.indexWhere((a) => a.id == globalArticleId);
+    if (articleIndex < 0) return;
+
+    final article = widget.allArticles[articleIndex];
+
+    // Mark current article as read before navigating
+    _markCurrentArticleRead();
+
+    // Navigate to the article being read
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ArticleWebviewPage(
+          articleId: article.id,
+          url: article.link ?? '',
+          title: article.title,
+          initialMainText: article.mainText,
+          initialImageUrl: article.imageUrl,
+          allArticles: widget.allArticles,
+          autoPlay: true, // Continue playing
+        ),
+      ),
+    );
   }
 
   @override

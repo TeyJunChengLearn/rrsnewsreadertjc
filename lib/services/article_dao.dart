@@ -178,4 +178,70 @@ class ArticleDao {
       [id],
     );
   }
+
+  /// Get all hidden/trashed articles (isRead == 2)
+  Future<List<FeedItem>> getHiddenArticles() async {
+    final db = await _dbService.database;
+    final rows = await db.query(
+      'articles',
+      where: 'isRead = 2',
+      orderBy: 'pubDateMillis DESC',
+    );
+    return rows.map(FeedItem.fromMap).toList();
+  }
+
+  /// Permanently delete an article by ID
+  Future<int> permanentlyDeleteById(String id) async {
+    final db = await _dbService.database;
+    return db.delete(
+      'articles',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Permanently delete multiple articles by IDs
+  Future<int> permanentlyDeleteByIds(List<String> ids) async {
+    if (ids.isEmpty) return 0;
+    final db = await _dbService.database;
+    final placeholders = ids.map((_) => '?').join(', ');
+    return db.delete(
+      'articles',
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+    );
+  }
+
+  /// Permanently delete all hidden articles (isRead == 2)
+  Future<int> permanentlyDeleteAllHidden() async {
+    final db = await _dbService.database;
+    return db.delete(
+      'articles',
+      where: 'isRead = 2',
+    );
+  }
+
+  /// Restore an article from trash (set isRead back to 1)
+  Future<void> restoreFromTrash(String id) async {
+    final db = await _dbService.database;
+    await db.update(
+      'articles',
+      {'isRead': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Restore multiple articles from trash
+  Future<void> restoreMultipleFromTrash(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final db = await _dbService.database;
+    final placeholders = ids.map((_) => '?').join(', ');
+    await db.update(
+      'articles',
+      {'isRead': 1},
+      where: 'id IN ($placeholders)',
+      whereArgs: ids,
+    );
+  }
 }

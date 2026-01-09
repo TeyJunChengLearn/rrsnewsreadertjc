@@ -576,6 +576,69 @@ static const int _maxRetries = 3; // Maximum retry attempts
   }
 }
 
+  /// Hide a single article (move to trash, isRead = 2)
+  Future<void> hideArticle(FeedItem item) async {
+    await repo.updateReadStatus(item.id, 2);
+    final idx = _items.indexWhere((e) => e.id == item.id);
+    if (idx >= 0) {
+      _items[idx] = item.copyWith(isRead: 2);
+      notifyListeners();
+    }
+  }
+
+  /// Get all hidden/trashed articles
+  Future<List<FeedItem>> getHiddenArticles() async {
+    return repo.getHiddenArticles();
+  }
+
+  /// Restore an article from trash
+  Future<void> restoreFromTrash(FeedItem item) async {
+    await repo.restoreFromTrash(item.id);
+    final idx = _items.indexWhere((e) => e.id == item.id);
+    if (idx >= 0) {
+      _items[idx] = item.copyWith(isRead: 1);
+    } else {
+      // Article might not be in memory, reload from DB
+      final restored = await repo.findById(item.id);
+      if (restored != null) {
+        _items.add(restored);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Restore multiple articles from trash
+  Future<void> restoreMultipleFromTrash(List<FeedItem> items) async {
+    final ids = items.map((e) => e.id).toList();
+    await repo.restoreMultipleFromTrash(ids);
+    // Reload from DB to get updated items
+    final merged = await repo.readAllFromDb();
+    _items..clear()..addAll(merged);
+    notifyListeners();
+  }
+
+  /// Permanently delete an article
+  Future<void> permanentlyDeleteArticle(FeedItem item) async {
+    await repo.permanentlyDeleteById(item.id);
+    _items.removeWhere((e) => e.id == item.id);
+    notifyListeners();
+  }
+
+  /// Permanently delete multiple articles
+  Future<void> permanentlyDeleteMultiple(List<FeedItem> items) async {
+    final ids = items.map((e) => e.id).toList();
+    await repo.permanentlyDeleteByIds(ids);
+    _items.removeWhere((e) => ids.contains(e.id));
+    notifyListeners();
+  }
+
+  /// Permanently delete all hidden articles
+  Future<void> permanentlyDeleteAllHidden() async {
+    await repo.permanentlyDeleteAllHidden();
+    _items.removeWhere((e) => e.isRead == 2);
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     // Cancel ongoing enrichment and release WakeLock when provider is disposed
