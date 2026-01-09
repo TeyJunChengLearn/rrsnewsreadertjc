@@ -193,32 +193,87 @@ class ArticleDao {
   /// Permanently delete an article by ID
   Future<int> permanentlyDeleteById(String id) async {
     final db = await _dbService.database;
-    return db.delete(
-      'articles',
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    return db.transaction((txn) async {
+      await txn.insert(
+        'deleted_articles',
+        {
+          'id': id,
+          'deletedAtMillis': DateTime.now().millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return txn.delete(
+        'articles',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
   }
 
   /// Permanently delete multiple articles by IDs
   Future<int> permanentlyDeleteByIds(List<String> ids) async {
     if (ids.isEmpty) return 0;
     final db = await _dbService.database;
-    final placeholders = ids.map((_) => '?').join(', ');
-    return db.delete(
-      'articles',
-      where: 'id IN ($placeholders)',
-      whereArgs: ids,
-    );
+    return db.transaction((txn) async {
+      final batch = txn.batch();
+      final deletedAt = DateTime.now().millisecondsSinceEpoch;
+      for (final id in ids) {
+        batch.insert(
+          'deleted_articles',
+          {'id': id, 'deletedAtMillis': deletedAt},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      final placeholders = ids.map((_) => '?').join(', ');
+      batch.delete(
+        'articles',
+        where: 'id IN ($placeholders)',
+        whereArgs: ids,
+      );
+      final results = await batch.commit();
+      return results.whereType<int>().fold(0, (sum, value) => sum + value);
+    });
   }
 
   /// Permanently delete all hidden articles (isRead == 2)
   Future<int> permanentlyDeleteAllHidden() async {
     final db = await _dbService.database;
-    return db.delete(
-      'articles',
-      where: 'isRead = 2',
+    return db.transaction((txn) async {
+      final trashedRows = await txn.query(
+        'articles',
+        columns: ['id'],
+        where: 'isRead = 2',
+      );
+      if (trashedRows.isNotEmpty) {
+        final batch = txn.batch();
+        final deletedAt = DateTime.now().millisecondsSinceEpoch;
+        for (final row in trashedRows) {
+          batch.insert(
+            'deleted_articles',
+            {'id': row['id'], 'deletedAtMillis': deletedAt},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        await batch.commit(noResult: true);
+      }
+      return txn.delete(
+        'articles',
+        where: 'isRead = 2',
+      );
+    });
+  }
+
+  Future<Set<String>> getDeletedArticleIds(Set<String> ids) async {
+    if (ids.isEmpty) return {};
+    final db = await _dbService.database;
+    final placeholders = ids.map((_) => '?').join(', ');
+    final rows = await db.query(
+      'deleted_articles',
+      columns: ['id'],
+      where: 'id IN ($placeholders)',
+      whereArgs: ids.toList(),
     );
+    return rows.map((row) => row['id'] as String).toSet();
   }
 
   /// Restore an article from trash (set isRead back to 1)

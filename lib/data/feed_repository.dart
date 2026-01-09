@@ -68,9 +68,13 @@ class FeedRepository {
       }
     }
 
+    final fetchedIds = fetched.map((item) => item.id).toSet();
+    final deletedIds = await articleDao.getDeletedArticleIds(fetchedIds);
+
     // 3) merge (preserve isRead / isBookmarked)
     final Map<String, FeedItem> mergedMap = {};
     for (final item in fetched) {
+      if (deletedIds.contains(item.id)) continue;
       final old = existingById[item.id];
       if (old != null) {
         final incomingText = item.mainText?.trim() ?? '';

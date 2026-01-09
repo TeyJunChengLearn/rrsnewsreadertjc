@@ -13,7 +13,7 @@ class DatabaseService {
   factory DatabaseService() => _instance;
 
   static const _dbName = 'news_reader.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
 
   Database? _db;
 
@@ -64,6 +64,13 @@ class DatabaseService {
         enrichmentAttempts INTEGER NOT NULL DEFAULT 0
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE deleted_articles (
+        id TEXT PRIMARY KEY,
+        deletedAtMillis INTEGER NOT NULL
+      )
+    ''');
   }
    Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
@@ -81,6 +88,14 @@ class DatabaseService {
     if (oldVersion < 5) {
       // Add enrichment failure tracking
       await db.execute('ALTER TABLE articles ADD COLUMN enrichmentAttempts INTEGER NOT NULL DEFAULT 0');
+    }
+    if (oldVersion < 6) {
+      await db.execute('''
+        CREATE TABLE deleted_articles (
+          id TEXT PRIMARY KEY,
+          deletedAtMillis INTEGER NOT NULL
+        )
+      ''');
     }
   }
 }
