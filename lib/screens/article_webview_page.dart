@@ -218,6 +218,7 @@ class ArticleWebviewPage extends StatefulWidget {
   final String url;
   final String? title; // optional RSS/article title to include in reading
   final String? articleId;
+  final String? sourceTitle; // Feed/source title for per-feed speed settings
   final String? initialMainText;
   final String? initialImageUrl;
 
@@ -232,6 +233,7 @@ class ArticleWebviewPage extends StatefulWidget {
     required this.url,
     this.title,
     this.articleId,
+    this.sourceTitle,
     this.initialMainText,
     this.initialImageUrl,
     this.allArticles = const [],
@@ -298,6 +300,8 @@ Future<void> stopGlobalTtsForArticle(String articleId) async {
   state.lines = [];
   state.articleId = '';
   state.articleTitle = '';
+  state.sourceTitle = '';
+  state.isTranslatedContent = false;
   await _globalTts.stop();
   await _globalNotifications.cancel(0); // Cancel reading notification
 }
@@ -326,11 +330,16 @@ class _TtsState {
   bool isPlaying = false;
   String articleId = '';
   String articleTitle = '';
+  String sourceTitle = ''; // Feed/source title for per-feed speed settings
+  bool isTranslatedContent = false; // Whether currently reading translated content
   bool notificationsInitialized = false;
   bool ttsInitialized = false;
   bool readerModeOn = false; // Remember reader mode state
   bool autoTranslateEnabled = false;
   String translateLangCode = 'off';
+
+  // Translation cache: articleId -> {translated: List<String>, original: List<String>}
+  final Map<String, Map<String, List<String>>> translationCache = {};
 
   // Article list for continuous reading
   List<FeedItem> allArticles = [];
@@ -452,6 +461,8 @@ Future<bool> _loadNextArticleGlobal() async {
     state.currentLine = 0;
     state.articleId = nextArticle.id;
     state.articleTitle = nextArticle.title;
+    state.sourceTitle = nextArticle.sourceTitle;
+    state.isTranslatedContent = false; // Reset to original content for new article
     state.currentArticleIndex = nextIndex;
 
     // Mark article as read
@@ -630,6 +641,16 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   set _currentLine(int value) => _ttsState.currentLine = value;
   bool get _isPlaying => _ttsState.isPlaying;
   set _isPlaying(bool value) => _ttsState.isPlaying = value;
+
+  /// Helper to get sourceTitle from allArticles when not provided directly
+  String _getSourceTitleFromArticles() {
+    if (widget.articleId == null || widget.allArticles.isEmpty) return '';
+    final article = widget.allArticles.cast<FeedItem?>().firstWhere(
+      (a) => a?.id == widget.articleId,
+      orElse: () => null,
+    );
+    return article?.sourceTitle ?? '';
+  }
 
   // Auto-advance state
   Timer? _autoAdvanceTimer;
@@ -840,6 +861,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _ttsState.lines.clear();
       _ttsState.articleId = '';
       _ttsState.articleTitle = '';
+      _ttsState.sourceTitle = '';
+      _ttsState.isTranslatedContent = false;
       _ttsState.readerModeOn = false; // Reset reader mode for new article
       // Clear the notification
       unawaited(_clearReadingNotification());
@@ -878,8 +901,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       await _ensureLinesLoaded();
 
-      // Auto-translate if enabled (after lines are loaded)
-      await _autoTranslateIfEnabled();
+      // Check for cached translation and restore if available
+      await _restoreCachedTranslation();
+
+      // Auto-translate if enabled (after lines are loaded, only if not already translated)
+      if (!_isTranslatedView) {
+        await _autoTranslateIfEnabled();
+      }
 
       final hasValidLine =
           _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length;
@@ -931,9 +959,17 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     try {
       final settings = _settings ?? context.read<SettingsProvider>();
       _settings ??= settings;
-      final rate = settings.ttsSpeechRate;
 
-      debugPrint('🔊 Applying TTS speech rate: $rate (playing: $_isPlaying)');
+      // Get the appropriate speed based on feed and translation state
+      final sourceTitle = _ttsState.sourceTitle.isNotEmpty
+          ? _ttsState.sourceTitle
+          : (widget.sourceTitle ?? _getSourceTitleFromArticles());
+      final isTranslated = _ttsState.isTranslatedContent || _isTranslatedView;
+
+      final rate = settings.getSpeedForArticle(sourceTitle, isTranslated);
+
+      debugPrint('🔊 Applying TTS speech rate: $rate '
+          '(feed: $sourceTitle, translated: $isTranslated, playing: $_isPlaying)');
 
       // Always apply the speech rate to the global TTS instance
       // The new rate will apply to the next line when it starts speaking
@@ -1657,6 +1693,66 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
+  /// Restore cached translation if available for this article
+  Future<void> _restoreCachedTranslation() async {
+    if (!mounted) return;
+    final articleId = widget.articleId;
+    if (articleId == null || articleId.isEmpty) return;
+
+    final cached = _ttsState.translationCache[articleId];
+    if (cached == null) return;
+
+    final translatedLines = cached['translated'];
+    final originalLines = cached['original'];
+
+    if (translatedLines == null || translatedLines.isEmpty) return;
+    if (originalLines == null || originalLines.isEmpty) return;
+
+    // Restore translation state
+    setState(() {
+      _originalLinesCache = List<String>.from(originalLines);
+      _lines
+        ..clear()
+        ..addAll(translatedLines);
+      _isTranslatedView = true;
+    });
+    _ttsState.isTranslatedContent = true;
+    // Sync global TTS state with translated lines
+    _ttsState.lines = _lines;
+
+    // Reload reader HTML with translated content
+    if (_readerOn) {
+      await _reloadReaderHtml(showLoading: false);
+    }
+
+    // Apply TTS locale for translated content
+    final settings = context.read<SettingsProvider>();
+    final code = settings.translateLangCode;
+    if (code != 'off') {
+      await _applyTtsLocale(code);
+    }
+    await _applySpeechRateFromSettings(restartIfPlaying: false);
+
+    debugPrint('📖 Restored cached translation for article: $articleId');
+  }
+
+  /// Save translation to cache
+  void _cacheTranslation(String articleId, List<String> original, List<String> translated) {
+    if (articleId.isEmpty) return;
+    _ttsState.translationCache[articleId] = {
+      'original': List<String>.from(original),
+      'translated': List<String>.from(translated),
+    };
+    debugPrint('💾 Cached translation for article: $articleId');
+  }
+
+  /// Clear cached translation for an article
+  void _clearCachedTranslation(String articleId) {
+    if (articleId.isEmpty) return;
+    _ttsState.translationCache.remove(articleId);
+    debugPrint('🗑️ Cleared cached translation for article: $articleId');
+  }
+
   Future<void> _toggleTranslateToSetting() async {
     final settings = context.read<SettingsProvider>();
     final code = settings.translateLangCode;
@@ -1685,9 +1781,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         });
         // Reset article language detection when un-translating
         _articlePrimaryLanguage = null;
+        // Update TTS state for speed settings
+        _ttsState.isTranslatedContent = false;
 
         await _reloadReaderHtml(showLoading: true);
         await _applyTtsLocale('en');
+        // Apply speech rate for original content
+        await _applySpeechRateFromSettings(restartIfPlaying: false);
 
         // If was playing before reverting translation, continue playing with original language
         if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
@@ -1748,9 +1848,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     // Reset article language detection when translating
     // This ensures the translated language is used consistently
     _articlePrimaryLanguage = null;
+    // Update TTS state for speed settings
+    _ttsState.isTranslatedContent = true;
+
+    // Cache the translation for this article
+    if (widget.articleId != null && _originalLinesCache != null) {
+      _cacheTranslation(widget.articleId!, _originalLinesCache!, translated);
+    }
 
     await _reloadReaderHtml(showLoading: true);
     await _applyTtsLocale(code);
+    // Apply speech rate for translated content
+    await _applySpeechRateFromSettings(restartIfPlaying: false);
 
     // If was playing before translation, continue playing with new language
     if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
@@ -1916,9 +2025,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       // Reset article language detection when translating
       _articlePrimaryLanguage = null;
+      // Update TTS state for speed settings
+      _ttsState.isTranslatedContent = true;
+
+      // Cache the translation for this article
+      if (widget.articleId != null && _originalLinesCache != null) {
+        _cacheTranslation(widget.articleId!, _originalLinesCache!, translated);
+      }
 
       await _reloadReaderHtml(showLoading: false); // Don't show loading spinner for auto-translate
       await _applyTtsLocale(code);
+      // Apply speech rate for translated content
+      await _applySpeechRateFromSettings(restartIfPlaying: false);
 
       // If was playing before translation, continue playing with new language
       if (wasPlaying && _lines.isNotEmpty && _currentLine >= 0 && _currentLine < _lines.length) {
@@ -2248,6 +2366,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _ttsState.lines = _lines;
     _ttsState.articleId = widget.articleId ?? '';
     _ttsState.articleTitle = widget.title ?? '';
+    _ttsState.sourceTitle = widget.sourceTitle ?? _getSourceTitleFromArticles();
+    _ttsState.isTranslatedContent = _isTranslatedView;
     _ttsState.readerModeOn = _readerOn; // Save reader mode state
 
     // Sync article list and current index for continuous reading

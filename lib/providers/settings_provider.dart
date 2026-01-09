@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +16,13 @@ class SettingsProvider extends ChangeNotifier {
   // Auto-translate articles when opening them
   bool _autoTranslate = false;
 
+  // Per-feed TTS speed settings
+  bool _customSpeedPerFeed = false;
+  double _defaultOriginalSpeed = 0.5;
+  double _defaultTranslatedSpeed = 0.5;
+  // Map: feedTitle -> {'original': double, 'translated': double}
+  Map<String, Map<String, double>> _feedSpeedSettings = {};
+
   bool get darkTheme => _darkTheme;
   bool get displaySummary => _displaySummary;
   bool get highlightText => _highlightText;
@@ -22,6 +30,11 @@ class SettingsProvider extends ChangeNotifier {
   int get articleLimitPerFeed => _articleLimitPerFeed;
   double get ttsSpeechRate => _ttsSpeechRate;
   bool get autoTranslate => _autoTranslate;
+  bool get customSpeedPerFeed => _customSpeedPerFeed;
+  double get defaultOriginalSpeed => _defaultOriginalSpeed;
+  double get defaultTranslatedSpeed => _defaultTranslatedSpeed;
+  Map<String, Map<String, double>> get feedSpeedSettings =>
+      Map.unmodifiable(_feedSpeedSettings);
   static const _kDarkTheme = 'darkTheme';
   static const _kDisplaySummary = 'displaySummary';
   static const _kHighlightText = 'highlightText';
@@ -29,6 +42,10 @@ class SettingsProvider extends ChangeNotifier {
   static const _kArticleLimitPerFeed = 'articleLimitPerFeed';
   static const _kTtsSpeechRate = 'ttsSpeechRate';
   static const _kAutoTranslate = 'autoTranslate';
+  static const _kCustomSpeedPerFeed = 'customSpeedPerFeed';
+  static const _kDefaultOriginalSpeed = 'defaultOriginalSpeed';
+  static const _kDefaultTranslatedSpeed = 'defaultTranslatedSpeed';
+  static const _kFeedSpeedSettings = 'feedSpeedSettings';
 
   Future<void> loadFromStorage() async {
     final prefs = await SharedPreferences.getInstance();
@@ -45,6 +62,30 @@ class SettingsProvider extends ChangeNotifier {
     // 🔴 add this line so translate language is restored on startup
     _translateLangCode =
         prefs.getString(_kTranslateLangKey) ?? _translateLangCode;
+
+    // Per-feed speed settings
+    _customSpeedPerFeed =
+        prefs.getBool(_kCustomSpeedPerFeed) ?? _customSpeedPerFeed;
+    _defaultOriginalSpeed =
+        prefs.getDouble(_kDefaultOriginalSpeed) ?? _defaultOriginalSpeed;
+    _defaultTranslatedSpeed =
+        prefs.getDouble(_kDefaultTranslatedSpeed) ?? _defaultTranslatedSpeed;
+
+    // Load feed speed settings from JSON
+    final feedSpeedJson = prefs.getString(_kFeedSpeedSettings);
+    if (feedSpeedJson != null) {
+      try {
+        final decoded = jsonDecode(feedSpeedJson) as Map<String, dynamic>;
+        _feedSpeedSettings = decoded.map((key, value) {
+          final innerMap = (value as Map<String, dynamic>).map(
+            (k, v) => MapEntry(k, (v as num).toDouble()),
+          );
+          return MapEntry(key, innerMap);
+        });
+      } catch (_) {
+        _feedSpeedSettings = {};
+      }
+    }
 
     notifyListeners();
   }
@@ -103,6 +144,71 @@ class SettingsProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kAutoTranslate, _autoTranslate);
   }
+
+  // ==================== Per-Feed Speed Settings ====================
+
+  Future<void> setCustomSpeedPerFeed(bool val) async {
+    _customSpeedPerFeed = val;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kCustomSpeedPerFeed, _customSpeedPerFeed);
+  }
+
+  Future<void> setDefaultOriginalSpeed(double rate) async {
+    _defaultOriginalSpeed = rate.clamp(0.3, 1.2).toDouble();
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kDefaultOriginalSpeed, _defaultOriginalSpeed);
+  }
+
+  Future<void> setDefaultTranslatedSpeed(double rate) async {
+    _defaultTranslatedSpeed = rate.clamp(0.3, 1.2).toDouble();
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_kDefaultTranslatedSpeed, _defaultTranslatedSpeed);
+  }
+
+  Future<void> setFeedSpeed(
+      String feedTitle, double originalSpeed, double translatedSpeed) async {
+    _feedSpeedSettings[feedTitle] = {
+      'original': originalSpeed.clamp(0.3, 1.2).toDouble(),
+      'translated': translatedSpeed.clamp(0.3, 1.2).toDouble(),
+    };
+    notifyListeners();
+    await _saveFeedSpeedSettings();
+  }
+
+  Future<void> removeFeedSpeed(String feedTitle) async {
+    _feedSpeedSettings.remove(feedTitle);
+    notifyListeners();
+    await _saveFeedSpeedSettings();
+  }
+
+  Future<void> _saveFeedSpeedSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = jsonEncode(_feedSpeedSettings);
+    await prefs.setString(_kFeedSpeedSettings, json);
+  }
+
+  /// Get the appropriate TTS speed for an article based on feed and language
+  double getSpeedForArticle(String feedTitle, bool isTranslated) {
+    if (!_customSpeedPerFeed) {
+      // Custom speeds disabled, use global speed
+      return _ttsSpeechRate;
+    }
+
+    // Check for feed-specific settings
+    final feedSettings = _feedSpeedSettings[feedTitle];
+    if (feedSettings != null) {
+      return isTranslated
+          ? (feedSettings['translated'] ?? _defaultTranslatedSpeed)
+          : (feedSettings['original'] ?? _defaultOriginalSpeed);
+    }
+
+    // Use default speeds
+    return isTranslated ? _defaultTranslatedSpeed : _defaultOriginalSpeed;
+  }
+
   static const _kTranslateLangKey = 'translate_lang_code';
   // Codes: 'off', 'en', 'ms', 'zh-CN', 'zh-TW', 'ja', 'ko', 'id', 'th', 'vi',
   // 'ar', 'fr', 'es', 'de', 'pt', 'it', 'ru', 'hi'

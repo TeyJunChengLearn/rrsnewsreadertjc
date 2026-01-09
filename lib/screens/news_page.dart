@@ -40,6 +40,10 @@ class _NewsPageState extends State<NewsPage> {
   String _ttsArticleTitle = '';
   String _ttsProgress = '';
 
+  // Selection mode state
+  bool _isSelectionMode = false;
+  Set<String> _selectedIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -93,10 +97,79 @@ class _NewsPageState extends State<NewsPage> {
   bool get _hasActiveFilter =>
       _readFilter != _LocalReadFilter.all ||
       _bmFilter != _LocalBookmarkFilter.all ||
-      _sortOrder != _LocalSortOrder.latestFirst ||
       _selectedSourceTitle != null;
 
   void _openDrawer() => _scaffoldKey.currentState?.openDrawer();
+
+  // Selection mode methods
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+      if (_selectedIds.isEmpty) {
+        _isSelectionMode = false;
+      }
+    });
+  }
+
+  void _selectAll(List<FeedItem> items) {
+    setState(() {
+      _selectedIds = items.map((e) => e.id).toSet();
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedIds.clear();
+      _isSelectionMode = false;
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+
+    final rss = context.read<RssProvider>();
+    final itemsToDelete = rss.allItems
+        .where((e) => _selectedIds.contains(e.id))
+        .toList();
+
+    // Stop TTS for any selected articles
+    for (final item in itemsToDelete) {
+      await stopGlobalTtsForArticle(item.id);
+    }
+
+    // Hide all selected (move to trash)
+    for (final item in itemsToDelete) {
+      await rss.hideArticle(item);
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${itemsToDelete.length} article(s) moved to trash'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () async {
+              for (final item in itemsToDelete) {
+                await rss.restoreFromTrash(item);
+              }
+            },
+          ),
+        ),
+      );
+      _clearSelection();
+    }
+  }
+
+  void _enterSelectionMode(String id) {
+    setState(() {
+      _isSelectionMode = true;
+      _selectedIds.add(id);
+    });
+  }
 
   Future<void> _loadSavedSortOrder() async {
     final prefs = await SharedPreferences.getInstance();
@@ -247,25 +320,40 @@ class _NewsPageState extends State<NewsPage> {
 
     return Scaffold(
       key: _scaffoldKey,
-      drawer: _NewsDrawer(
+      drawer: _isSelectionMode ? null : _NewsDrawer(
         selectedSourceTitle: _selectedSourceTitle,
         onSourceSelected: (title) => setState(() => _selectedSourceTitle = title),
       ),
       appBar: AppBar(
         titleSpacing: 0,
-        leading:
-            IconButton(icon: const Icon(Icons.menu), onPressed: _openDrawer),
-        title:
-            const Text('News', style: TextStyle(fontWeight: FontWeight.w600)),
+        leading: _isSelectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _clearSelection,
+                tooltip: 'Cancel selection',
+              )
+            : IconButton(icon: const Icon(Icons.menu), onPressed: _openDrawer),
+        title: _isSelectionMode
+            ? Text('${_selectedIds.length} selected',
+                style: const TextStyle(fontWeight: FontWeight.w600))
+            : const Text('News', style: TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: true,
-        actions: [
-          IconButton(
-              icon: const Icon(Icons.tune),
-              onPressed: () => _openFilterSheet(context)),
-          IconButton(
-              icon: const Icon(Icons.search),
-              onPressed: () => _openSearch(context)),
-        ],
+        actions: _isSelectionMode
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.select_all),
+                  onPressed: () => _selectAll(allFeeds),
+                  tooltip: 'Select all',
+                ),
+              ]
+            : [
+                IconButton(
+                    icon: const Icon(Icons.tune),
+                    onPressed: () => _openFilterSheet(context)),
+                IconButton(
+                    icon: const Icon(Icons.search),
+                    onPressed: () => _openSearch(context)),
+              ],
       ),
       body: RefreshIndicator(
         onRefresh: rss.refresh,
@@ -291,15 +379,11 @@ class _NewsPageState extends State<NewsPage> {
                       setState(() {
                         _readFilter = _LocalReadFilter.all;
                         _bmFilter = _LocalBookmarkFilter.all;
-                        _sortOrder = _LocalSortOrder.latestFirst;
                         _selectedSourceTitle = null;
                       });
 
-                      _persistSortOrder(_LocalSortOrder.latestFirst);
-
-                      // CRITICAL: Sync with RssProvider to reset enrichment order
+                      // Sync with RssProvider to reset filters (keep sort order unchanged)
                       final rss = context.read<RssProvider>();
-                      rss.setSortOrder(SortOrder.latestFirst);
                       rss.setReadFilter(ReadFilter.all);
                       rss.setBookmarkFilter(BookmarkFilter.all);
                     },
@@ -327,7 +411,14 @@ class _NewsPageState extends State<NewsPage> {
             ...List.generate(allFeeds.length, (index) {
               final item = allFeeds[index];
               // Pass the full article list for navigation (respects current sort order and filters)
-              return _ArticleRow(item: item, allArticles: allFeeds);
+              return _ArticleRow(
+                item: item,
+                allArticles: allFeeds,
+                isSelectionMode: _isSelectionMode,
+                isSelected: _selectedIds.contains(item.id),
+                onToggleSelection: () => _toggleSelection(item.id),
+                onLongPress: () => _enterSelectionMode(item.id),
+              );
             }),
             const SizedBox(height: 24),
           ],
@@ -340,54 +431,105 @@ class _NewsPageState extends State<NewsPage> {
         icon: const Icon(Icons.done_all),
         label: const Text('Hide read'),
       ),
-      bottomNavigationBar: _isTtsPlaying || _ttsArticleTitle.isNotEmpty
-          ? _TtsControlBar(
-              isPlaying: _isTtsPlaying,
-              articleTitle: _ttsArticleTitle,
-              progress: _ttsProgress,
-              onPlayPause: () async {
-                await toggleGlobalTts();
-                setState(() {
-                  _isTtsPlaying = isGlobalTtsPlaying();
-                });
-              },
-              onStop: () async {
-                await stopGlobalTts();
-                setState(() {
-                  _isTtsPlaying = false;
-                  _ttsArticleTitle = '';
-                  _ttsProgress = '';
-                });
-              },
-              onTap: () {
-                // Navigate to the currently playing article
-                final articleId = getGlobalTtsArticleId();
-                if (articleId.isEmpty) return;
-
-                // Find the article in the list
-                final article = allFeeds.cast<FeedItem?>().firstWhere(
-                  (a) => a?.id == articleId,
-                  orElse: () => null,
-                );
-
-                if (article != null) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ArticleWebviewPage(
-                        articleId: article.id,
-                        url: article.link,
-                        title: article.title,
-                        initialMainText: article.mainText,
-                        initialImageUrl: article.imageUrl,
-                        allArticles: allFeeds,
-                        autoPlay: false, // Don't restart, TTS is already playing
-                      ),
-                    ),
-                  );
-                }
-              },
+      bottomNavigationBar: _isSelectionMode && _selectedIds.isNotEmpty
+          ? _SelectionActionBar(
+              selectedCount: _selectedIds.length,
+              onDelete: _deleteSelected,
             )
-          : null,
+          : (_isTtsPlaying || _ttsArticleTitle.isNotEmpty
+              ? _TtsControlBar(
+                  isPlaying: _isTtsPlaying,
+                  articleTitle: _ttsArticleTitle,
+                  progress: _ttsProgress,
+                  onPlayPause: () async {
+                    await toggleGlobalTts();
+                    setState(() {
+                      _isTtsPlaying = isGlobalTtsPlaying();
+                    });
+                  },
+                  onStop: () async {
+                    await stopGlobalTts();
+                    setState(() {
+                      _isTtsPlaying = false;
+                      _ttsArticleTitle = '';
+                      _ttsProgress = '';
+                    });
+                  },
+                  onTap: () {
+                    // Navigate to the currently playing article
+                    final articleId = getGlobalTtsArticleId();
+                    if (articleId.isEmpty) return;
+
+                    // Find the article in the list
+                    final article = allFeeds.cast<FeedItem?>().firstWhere(
+                      (a) => a?.id == articleId,
+                      orElse: () => null,
+                    );
+
+                    if (article != null) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ArticleWebviewPage(
+                            articleId: article.id,
+                            url: article.link,
+                            title: article.title,
+                            sourceTitle: article.sourceTitle,
+                            initialMainText: article.mainText,
+                            initialImageUrl: article.imageUrl,
+                            allArticles: allFeeds,
+                            autoPlay: false, // Don't restart, TTS is already playing
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                )
+              : null),
+    );
+  }
+}
+
+// ---------------- Selection Action Bar ----------------
+
+class _SelectionActionBar extends StatelessWidget {
+  final int selectedCount;
+  final VoidCallback onDelete;
+
+  const _SelectionActionBar({
+    required this.selectedCount,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Material(
+      elevation: 8,
+      color: isDark ? Colors.grey.shade900 : Colors.white,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline),
+                  label: Text('Delete $selectedCount article(s)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -843,7 +985,19 @@ class _UnreadChip extends StatelessWidget {
 class _ArticleRow extends StatelessWidget {
   final FeedItem item;
   final List<FeedItem> allArticles;
-  const _ArticleRow({required this.item, required this.allArticles});
+  final bool isSelectionMode;
+  final bool isSelected;
+  final VoidCallback onToggleSelection;
+  final VoidCallback onLongPress;
+
+  const _ArticleRow({
+    required this.item,
+    required this.allArticles,
+    this.isSelectionMode = false,
+    this.isSelected = false,
+    required this.onToggleSelection,
+    required this.onLongPress,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -929,6 +1083,10 @@ class _ArticleRow extends StatelessWidget {
     );
     return InkWell(
       onTap: () {
+        if (isSelectionMode) {
+          onToggleSelection();
+          return;
+        }
         rss.markRead(currentItem);
         if (url.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -941,6 +1099,7 @@ class _ArticleRow extends StatelessWidget {
               articleId: currentItem.id,
               url: url,
               title: currentItem.title,
+              sourceTitle: currentItem.sourceTitle,
               initialMainText: currentItem.mainText,
               initialImageUrl: currentItem.imageUrl,
               allArticles: allArticles,
@@ -948,11 +1107,24 @@ class _ArticleRow extends StatelessWidget {
           ),
         );
       },
-      child: Padding(
+      onLongPress: onLongPress,
+      child: Container(
+        color: isSelected
+            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.1)
+            : null,
+        child: Padding(
         padding: const EdgeInsets.only(bottom: 24.0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Checkbox for selection mode
+            if (isSelectionMode) ...[
+              Checkbox(
+                value: isSelected,
+                onChanged: (_) => onToggleSelection(),
+              ),
+              const SizedBox(width: 8),
+            ],
             // LEFT
             Expanded(
               child: Column(
@@ -1198,6 +1370,7 @@ class _ArticleRow extends StatelessWidget {
           ],
         ),
       ),
+      ), // Close Container
     );
   }
 }

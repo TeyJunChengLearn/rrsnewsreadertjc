@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/rss_provider.dart';
 import 'cookie_diagnostic_page.dart';
+import 'feed_speed_settings_page.dart';
 import '../services/local_backup_service.dart';
 import '../models/backup_data.dart';
 
@@ -333,6 +334,24 @@ class SettingsPage extends StatelessWidget {
                     },
                   );
                 },
+              );
+            },
+          ),
+
+          ListTile(
+            leading: const Icon(Icons.tune),
+            title: const Text('Custom speed per feed'),
+            subtitle: Text(
+              d.customSpeedPerFeed
+                  ? 'Different feeds have different TTS speeds'
+                  : 'Tap to configure per-feed speeds',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const FeedSpeedSettingsPage(),
+                ),
               );
             },
           ),
