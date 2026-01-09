@@ -326,6 +326,18 @@ Future<void> applyGlobalTtsSpeechRate(double rate) async {
   await _globalTts.setSpeechRate(rate);
 }
 
+/// Apply speech rate based on current global TTS state and settings.
+Future<void> applyGlobalTtsSpeechRateFromSettings(
+  SettingsProvider settings,
+) async {
+  final state = _TtsState.instance;
+  final rate = settings.getSpeedForArticle(
+    state.sourceTitle,
+    state.isTranslatedContent,
+  );
+  await _globalTts.setSpeechRate(rate);
+}
+
 // ============ End Public TTS Control API ============
 
 // Global state for background playback
@@ -1955,9 +1967,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       // Update global state with translated lines
       _ttsState.lines = translated;
+      _ttsState.isTranslatedContent = true;
 
       // Update TTS locale for the new language
       await _applyTtsLocale(code);
+
+      if (mounted) {
+        await _applySpeechRateFromSettings(restartIfPlaying: false);
+      }
     } catch (_) {
       // Silent failure - auto-translate is optional
     }

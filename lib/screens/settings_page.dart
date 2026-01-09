@@ -316,7 +316,9 @@ class SettingsPage extends StatelessWidget {
                                         // Properly await the async call
                                         try {
                                           await d.setTtsSpeechRate(temp);
-                                          await applyGlobalTtsSpeechRate(temp);
+                                          await applyGlobalTtsSpeechRateFromSettings(
+                                            context.read<SettingsProvider>(),
+                                          );
                                         } catch (e) {
                                           // Silently handle error
                                         }

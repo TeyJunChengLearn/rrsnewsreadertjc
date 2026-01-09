@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/settings_provider.dart';
 import '../providers/rss_provider.dart';
+import 'article_webview_page.dart';
 
 class FeedSpeedSettingsPage extends StatefulWidget {
   const FeedSpeedSettingsPage({super.key});
@@ -35,7 +36,10 @@ class _FeedSpeedSettingsPageState extends State<FeedSpeedSettingsPage> {
                   : 'All feeds use the same global TTS speed',
             ),
             value: settings.customSpeedPerFeed,
-            onChanged: (v) => settings.setCustomSpeedPerFeed(v),
+            onChanged: (v) async {
+              await settings.setCustomSpeedPerFeed(v);
+              await applyGlobalTtsSpeechRateFromSettings(settings);
+            },
           ),
 
           if (settings.customSpeedPerFeed) ...[
@@ -54,7 +58,10 @@ class _FeedSpeedSettingsPageState extends State<FeedSpeedSettingsPage> {
             _SpeedSlider(
               label: 'Original language',
               value: settings.defaultOriginalSpeed,
-              onChanged: (v) => settings.setDefaultOriginalSpeed(v),
+              onChanged: (v) {
+                settings.setDefaultOriginalSpeed(v);
+                applyGlobalTtsSpeechRateFromSettings(settings);
+              },
             ),
             const SizedBox(height: 16),
 
@@ -62,7 +69,10 @@ class _FeedSpeedSettingsPageState extends State<FeedSpeedSettingsPage> {
             _SpeedSlider(
               label: 'Translated content',
               value: settings.defaultTranslatedSpeed,
-              onChanged: (v) => settings.setDefaultTranslatedSpeed(v),
+              onChanged: (v) {
+                settings.setDefaultTranslatedSpeed(v);
+                applyGlobalTtsSpeechRateFromSettings(settings);
+              },
             ),
 
             const Divider(height: 32),
@@ -103,7 +113,10 @@ class _FeedSpeedSettingsPageState extends State<FeedSpeedSettingsPage> {
                   trailing: hasCustom
                       ? IconButton(
                           icon: const Icon(Icons.delete_outline),
-                          onPressed: () => settings.removeFeedSpeed(feed.title),
+                          onPressed: () async {
+                            await settings.removeFeedSpeed(feed.title);
+                            await applyGlobalTtsSpeechRateFromSettings(settings);
+                          },
                           tooltip: 'Remove custom speed',
                         )
                       : const Icon(Icons.chevron_right),
@@ -256,6 +269,7 @@ class _FeedSpeedSettingsPageState extends State<FeedSpeedSettingsPage> {
                                 originalSpeed,
                                 translatedSpeed,
                               );
+                              await applyGlobalTtsSpeechRateFromSettings(settings);
                               if (ctx.mounted) Navigator.of(ctx).pop();
                             },
                             child: const Text('Save'),
