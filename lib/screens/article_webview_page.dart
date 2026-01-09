@@ -1144,122 +1144,171 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   if(!txt){return;}
   const cls='flutter-tts-highlight';
 
-  // Remove old highlights
+  // Remove old highlights - unwrap mark elements back to text nodes
   document.querySelectorAll('mark.'+cls).forEach(m=>{
     const parent=m.parentNode;
     if(!parent){return;}
-    parent.replaceChild(document.createTextNode(m.textContent||''), m);
+    while(m.firstChild){
+      parent.insertBefore(m.firstChild, m);
+    }
+    parent.removeChild(m);
     parent.normalize();
   });
 
-  // Normalize search text (remove extra whitespace)
-  const searchText = txt.trim().replace(/\\s+/g, ' ').toLowerCase();
+  // Normalize search text (remove extra whitespace, normalize unicode)
+  const searchText = txt.trim().replace(/\\s+/g, ' ').toLowerCase().normalize('NFC');
 
-  // Find all text-containing elements (paragraphs, divs, articles, etc.)
-  const containers = Array.from(document.querySelectorAll('p, div, article, section, main, li, td, th, span, a, h1, h2, h3, h4, h5, h6'));
+  // Find all text-containing elements (comprehensive list including formatted elements)
+  const containers = Array.from(document.querySelectorAll('p, div, article, section, main, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, figcaption, caption, pre, code'));
 
-  for(let container of containers){
-    // Get the combined text content of this container
-    const containerText = container.textContent || '';
-    const normalizedText = containerText.trim().replace(/\\s+/g, ' ').toLowerCase();
+  // Helper to get all text nodes in order with their positions
+  function getTextNodesWithPositions(container){
+    const result = [];
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    let node;
+    let accumulatedText = '';
+    while(node = walker.nextNode()){
+      const nodeText = node.nodeValue || '';
+      if(!nodeText) continue;
+      result.push({
+        node: node,
+        startPos: accumulatedText.length,
+        text: nodeText
+      });
+      accumulatedText += nodeText;
+    }
+    return { nodes: result, fullText: accumulatedText };
+  }
 
-    // Check if search text is in this container
-    const startIndex = normalizedText.indexOf(searchText);
-    if(startIndex === -1) continue;
-
-    // Found a match! Now highlight it
-    try {
-      // Create a tree walker to find all text nodes
-      const walker = document.createTreeWalker(
-        container,
-        NodeFilter.SHOW_TEXT,
-        null,
-        false
-      );
-
-      let textNodes = [];
-      let node;
-      while(node = walker.nextNode()){
-        if(node.nodeValue && node.nodeValue.trim()){
-          textNodes.push(node);
+  // Helper to normalize text for matching (preserves position mapping)
+  function buildNormalizedMap(text){
+    // Maps normalized position -> original position
+    const map = [];
+    let normalized = '';
+    let lastWasSpace = true; // Start true to trim leading
+    for(let i = 0; i < text.length; i++){
+      const c = text[i];
+      if(/\\s/.test(c)){
+        if(!lastWasSpace && normalized.length > 0){
+          map.push(i);
+          normalized += ' ';
+          lastWasSpace = true;
         }
+      } else {
+        map.push(i);
+        normalized += c.toLowerCase();
+        lastWasSpace = false;
       }
+    }
+    // Trim trailing space
+    if(normalized.endsWith(' ')){
+      normalized = normalized.slice(0, -1);
+      map.pop();
+    }
+    return { normalized, map };
+  }
 
-      // Calculate character positions
-      let charCount = 0;
-      let startNode = null, startOffset = 0;
-      let endNode = null, endOffset = 0;
-      let searchEndIndex = startIndex + searchText.length;
+  // Highlight text nodes in a range (handles cross-element highlighting)
+  function highlightRange(textNodesInfo, startOriginal, endOriginal){
+    const nodes = textNodesInfo.nodes;
+    let firstMark = null;
 
-      for(let textNode of textNodes){
-        const nodeText = textNode.nodeValue || '';
-        const nodeLength = nodeText.length;
+    for(const info of nodes){
+      const nodeStart = info.startPos;
+      const nodeEnd = nodeStart + info.text.length;
 
-        // Check if this node contains the start
-        if(startNode === null && charCount + nodeLength > startIndex){
-          startNode = textNode;
-          startOffset = startIndex - charCount;
-        }
+      // Check if this node overlaps with highlight range
+      if(nodeEnd <= startOriginal || nodeStart >= endOriginal) continue;
 
-        // Check if this node contains the end
-        if(endNode === null && charCount + nodeLength >= searchEndIndex){
-          endNode = textNode;
-          endOffset = searchEndIndex - charCount;
-          break;
-        }
+      // Calculate overlap within this node
+      const highlightStart = Math.max(0, startOriginal - nodeStart);
+      const highlightEnd = Math.min(info.text.length, endOriginal - nodeStart);
 
-        charCount += nodeLength;
-      }
+      if(highlightStart >= highlightEnd) continue;
 
-      // Create range and highlight
-      if(startNode && endNode){
-        const range = document.createRange();
-        range.setStart(startNode, Math.max(0, startOffset));
-        range.setEnd(endNode, Math.min(endNode.nodeValue.length, endOffset));
+      try {
+        const textNode = info.node;
+        const parent = textNode.parentNode;
+        if(!parent) continue;
+
+        // Split text node if needed and wrap the highlighted portion
+        const beforeText = info.text.substring(0, highlightStart);
+        const highlightText = info.text.substring(highlightStart, highlightEnd);
+        const afterText = info.text.substring(highlightEnd);
 
         const mark = document.createElement('mark');
         mark.className = cls;
         mark.style.backgroundColor = 'rgba(255,235,59,0.4)';
         mark.style.padding = '2px 0';
+        mark.textContent = highlightText;
 
-        range.surroundContents(mark);
-        mark.scrollIntoView({behavior:'smooth', block:'center'});
-        return; // Found and highlighted, exit
-      }
-    } catch(e) {
-      // If highlighting fails for this container, continue to next
-      console.log('Highlight error:', e);
-    }
-  }
+        // Build replacement nodes
+        const frag = document.createDocumentFragment();
+        if(beforeText) frag.appendChild(document.createTextNode(beforeText));
+        frag.appendChild(mark);
+        if(afterText) frag.appendChild(document.createTextNode(afterText));
 
-  // Fallback: Try simple text node search (original method)
-  function simpleWalk(node){
-    if(!node){return false;}
-    if(node.nodeType===3){
-      const nodeText = (node.data || '').toLowerCase();
-      const searchLower = searchText.toLowerCase();
-      const index = nodeText.indexOf(searchLower);
-      if(index !== -1){
-        try{
-          const range = document.createRange();
-          range.setStart(node, index);
-          range.setEnd(node, index + searchText.length);
-          const mark = document.createElement('mark');
-          mark.className = cls;
-          mark.style.backgroundColor = 'rgba(255,235,59,0.4)';
-          range.surroundContents(mark);
-          mark.scrollIntoView({behavior:'smooth', block:'center'});
-          return true;
-        }catch(e){}
+        parent.replaceChild(frag, textNode);
+
+        if(!firstMark) firstMark = mark;
+      } catch(e){
+        console.log('Node highlight error:', e);
       }
     }
-    const children = Array.from(node.childNodes||[]);
-    for(let i=0; i<children.length; i++){
-      if(simpleWalk(children[i])) return true;
+
+    if(firstMark){
+      firstMark.scrollIntoView({behavior:'smooth', block:'center'});
+      return true;
     }
     return false;
   }
-  simpleWalk(document.body);
+
+  for(const container of containers){
+    const textInfo = getTextNodesWithPositions(container);
+    if(!textInfo.fullText.trim()) continue;
+
+    const { normalized, map } = buildNormalizedMap(textInfo.fullText);
+    const searchIndex = normalized.indexOf(searchText);
+
+    if(searchIndex === -1) continue;
+
+    // Map normalized positions back to original positions
+    const originalStart = map[searchIndex] || 0;
+    const originalEnd = (map[searchIndex + searchText.length - 1] || originalStart) + 1;
+
+    if(highlightRange(textInfo, originalStart, originalEnd)){
+      return; // Successfully highlighted
+    }
+  }
+
+  // Fallback: Try matching with more relaxed whitespace
+  for(const container of containers){
+    const textInfo = getTextNodesWithPositions(container);
+    const fullText = textInfo.fullText;
+    if(!fullText.trim()) continue;
+
+    // Build a regex pattern that allows flexible whitespace
+    const words = searchText.split(/\\s+/).filter(w => w);
+    if(words.length === 0) continue;
+
+    const pattern = words.map(w => w.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\\$&')).join('\\\\s+');
+    const regex = new RegExp(pattern, 'i');
+    const match = fullText.match(regex);
+
+    if(match && match.index !== undefined){
+      const originalStart = match.index;
+      const originalEnd = match.index + match[0].length;
+
+      if(highlightRange(textInfo, originalStart, originalEnd)){
+        return;
+      }
+    }
+  }
 })($escaped);
 ''';
       await _controller.runJavaScript(script);
@@ -2744,42 +2793,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
             if (_isLoading)
               const LinearProgressIndicator(
                 minHeight: 2,
-              ),
-            if (!_readerOn &&
-                settings.highlightText &&
-                (_webHighlightText?.isNotEmpty ?? false))
-              Positioned(
-                top: 12,
-                left: 12,
-                right: 12,
-                child: SafeArea(
-                  child: IgnorePointer(
-                    ignoring: true,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: Colors.yellow.shade100.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black26,
-                            blurRadius: 6,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12.0),
-                        child: Text(
-                          _webHighlightText ?? '',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               ),
             if (_paywallLikely)
               Positioned(
