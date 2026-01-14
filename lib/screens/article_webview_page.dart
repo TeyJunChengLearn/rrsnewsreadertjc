@@ -2401,12 +2401,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     // Highlight current line in reader mode (if setting ON)
-    // Use unawaited for auto-advance to prevent delays
-    if (auto && _isPlaying) {
-      unawaited(_highlightLine(_currentLine));
-    } else {
-      await _highlightLine(_currentLine);
-    }
+    // Always await to ensure highlight completes before speaking
+    await _highlightLine(_currentLine);
 
     // Sync global state with local lines
     _ttsState.lines = _lines;
