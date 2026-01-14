@@ -526,7 +526,7 @@ Future<void> _speakNextLineGlobal({bool auto = false}) async {
     final loaded = await _loadNextArticleGlobal();
     if (loaded) {
       // Successfully loaded next article, continue playing
-      await _speakCurrentLineGlobal();
+      await _speakCurrentLineGlobal(stopFirst: !auto);
     } else {
       // No more articles, stop playing
       state.isPlaying = false;
@@ -538,11 +538,11 @@ Future<void> _speakNextLineGlobal({bool auto = false}) async {
   }
 
   state.currentLine = nextLine;
-  await _speakCurrentLineGlobal();
+  await _speakCurrentLineGlobal(stopFirst: !auto);
 }
 
 // Global function to speak current line
-Future<void> _speakCurrentLineGlobal() async {
+Future<void> _speakCurrentLineGlobal({bool stopFirst = true}) async {
   final state = _TtsState.instance;
   if (state.lines.isEmpty || state.currentLine >= state.lines.length || state.currentLine < 0) {
     return;
@@ -556,7 +556,9 @@ Future<void> _speakCurrentLineGlobal() async {
 
   state.isPlaying = true;
   await _showReadingNotificationGlobal(text);
-  await _globalTts.stop();
+  if (stopFirst) {
+    await _globalTts.stop();
+  }
   // Speech rate should already be set by the widget, but ensure it's set
   // (The rate persists in _globalTts once set, so this is just a safety check)
   await _globalTts.speak(text);
@@ -2343,7 +2345,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
     return raw.toString();
   }
-  Future<void> _speakCurrentLine() async {
+  Future<void> _speakCurrentLine({bool stopFirst = true}) async {
     _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
@@ -2402,7 +2404,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     // Stop any currently playing TTS first (before setting state)
-    await _globalTts.stop();
+    if (stopFirst) {
+      await _globalTts.stop();
+    }
     // Apply speech rate but don't restart (we're about to speak anyway)
     await _applySpeechRateFromSettings(restartIfPlaying: false);
 
@@ -2481,7 +2485,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     setState(() => _currentLine = i);
     // Auto-save position after moving to new line
     unawaited(_saveReadingPosition());
-    await _speakCurrentLine();
+    await _speakCurrentLine(stopFirst: !auto);
   }
 
   Future<void> _speakPrevLine() async {
@@ -2502,7 +2506,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     setState(() => _currentLine = i);
     // Auto-save position after moving to previous line
     unawaited(_saveReadingPosition());
-    await _speakCurrentLine();
+    await _speakCurrentLine(stopFirst: !auto);
   }
 
   Future<void> _stopSpeaking() async {
