@@ -1291,7 +1291,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   if(!document.getElementById(styleId)){
     const style = document.createElement('style');
     style.id = styleId;
-    style.textContent = 'mark.'+cls+'{background:rgba(255,235,59,0.6) !important;color:inherit !important;padding:0 0.12em;border-radius:0.12em;}';
+    style.textContent = 'mark.'+cls+'{background:rgba(255,235,59,0.75) !important;color:inherit !important;padding:0 0.12em !important;border-radius:0.12em !important;box-decoration-break:clone !important;-webkit-box-decoration-break:clone !important;}';
     document.head.appendChild(style);
   }
 
@@ -1394,8 +1394,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
         const mark = document.createElement('mark');
         mark.className = cls;
-        mark.style.backgroundColor = 'rgba(255,235,59,0.4)';
-        mark.style.padding = '2px 0';
+        mark.style.setProperty('background-color', 'rgba(255,235,59,0.75)', 'important');
+        mark.style.setProperty('color', 'inherit', 'important');
+        mark.style.setProperty('padding', '0 0.12em', 'important');
+        mark.style.setProperty('border-radius', '0.12em', 'important');
+        mark.style.setProperty('box-decoration-break', 'clone', 'important');
+        mark.style.setProperty('-webkit-box-decoration-break', 'clone', 'important');
         mark.textContent = highlightText;
 
         // Build replacement nodes
