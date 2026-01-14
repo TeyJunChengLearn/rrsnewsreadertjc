@@ -31,14 +31,29 @@ class ArticleContentService {
       // Auto-detect if this URL requires WebView extraction (paywalled sites)
       // Only use WebView if allowed (not available in background tasks)
       final shouldUseWebView = allowWebView && _isPaywalledDomain(item.link);
-      final delayMs = shouldUseWebView ? defaultDelayMs : 0;
+      final delayMs = shouldUseWebView ? _getOptimalDelay(item.link) : 0;
+
+      print('🔍 Enriching: ${item.title}');
+      print('   URL: ${item.link}');
+      print('   WebView: $shouldUseWebView, Delay: ${delayMs}ms');
 
       final content = await readability.extractMainContent(
         item.link,
         useWebView: shouldUseWebView,
         delayMs: delayMs,
       );
-      if (content == null) continue;
+
+      if (content == null) {
+        print('   ❌ Extraction failed (returned null)');
+        continue;
+      }
+
+      final extractedLength = content.mainText?.trim().length ?? 0;
+      print('   ✓ Extracted ${extractedLength} chars (source: ${content.source})');
+
+      if (extractedLength < 150) {
+        print('   ⚠️ Content too short (< 150 chars), likely incomplete');
+      }
 
       final updates = <String, String?>{};
       final trimmedText = content.mainText?.trim();
@@ -170,5 +185,59 @@ bool _isPaywalledDomain(String url) {
     return false;
   } catch (_) {
     return false;
+  }
+}
+
+/// Returns the optimal WebView delay for a given URL
+/// Different sites require different delays for JavaScript to fully load
+int _getOptimalDelay(String url) {
+  try {
+    final uri = Uri.parse(url);
+    final host = uri.host.toLowerCase();
+
+    // Malaysian news sites with heavy JavaScript/authentication
+    // These need longer delays to fully load subscriber content
+    const heavyJsSites = {
+      'malaysiakini.com': 6000,      // Malaysiakini needs 6 seconds for auth
+      'mkini.bz': 6000,               // Malaysiakini short domain
+      'hmetro.com.my': 5000,          // Harian Metro
+      'harakahdaily.net': 5000,       // Harakah Daily
+      'sinchew.com.my': 5000,         // Sin Chew Daily
+      'orientaldaily.com.my': 5000,   // Oriental Daily
+      'freemalaysiatoday.com': 4000,  // FMT
+    };
+
+    // International paywall sites
+    // These also need extra time for authentication checks
+    const internationalPaywalls = {
+      'nytimes.com': 5000,
+      'wsj.com': 5000,
+      'bloomberg.com': 4000,
+      'ft.com': 5000,
+      'economist.com': 4000,
+      'washingtonpost.com': 4000,
+      'medium.com': 3000,
+      'wired.com': 3000,
+      'theatlantic.com': 3000,
+    };
+
+    // Check Malaysian sites first (higher priority)
+    for (final entry in heavyJsSites.entries) {
+      if (host.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    // Check international sites
+    for (final entry in internationalPaywalls.entries) {
+      if (host.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    // Default delay for other paywalled sites
+    return 3000;
+  } catch (_) {
+    return 3000; // Default 3 seconds
   }
 }
