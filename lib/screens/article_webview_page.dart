@@ -1287,6 +1287,13 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 (function(txt){
   if(!txt){return false;}
   const cls='flutter-tts-highlight';
+  const styleId = 'flutter-tts-highlight-style';
+  if(!document.getElementById(styleId)){
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = 'mark.'+cls+'{background:rgba(255,235,59,0.6) !important;color:inherit !important;padding:0 0.12em;border-radius:0.12em;}';
+    document.head.appendChild(style);
+  }
 
   // Remove old highlights - unwrap mark elements back to text nodes
   document.querySelectorAll('mark.'+cls).forEach(m=>{
@@ -1499,7 +1506,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         '.wrap{max-width:760px;margin:0 auto;padding:16px;}'
         'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}'
         'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}'
-        'p.hl{background-color:rgba(255,235,59,0.4);}'
+        'p.hl{background-color:rgba(255,235,59,0.4) !important;}'
         // treat first line (index 0) as header
         'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:1.2rem;}'
         '</style>');
