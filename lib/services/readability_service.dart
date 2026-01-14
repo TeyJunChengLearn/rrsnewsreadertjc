@@ -372,7 +372,15 @@ class Readability4JExtended {
       String? cookieHeader;
       if (_cookieHeaderBuilder != null) {
         cookieHeader = await _cookieHeaderBuilder!(url);
+        if (cookieHeader != null && cookieHeader.isNotEmpty) {
+          final cookieCount = cookieHeader.split(';').length;
+          print('   🍪 Using $cookieCount cookies for authentication');
+        } else {
+          print('   ⚠️ No cookies available - may not access subscriber content');
+        }
       }
+
+      print('   🌐 Rendering in WebView (delay: ${delayMs}ms)...');
 
       // Render page in WebView with delay
       final html = await _webViewExtractor!.renderPage(
@@ -382,12 +390,17 @@ class Readability4JExtended {
         cookieHeader: cookieHeader,
       );
 
-      if (html == null || html.isEmpty) return null;
+      if (html == null || html.isEmpty) {
+        print('   ❌ WebView returned empty HTML');
+        return null;
+      }
+
+      print('   📄 Received HTML (${html.length} chars), extracting content...');
 
       // Extract content from rendered HTML
       return await extractFromHtml(url, html, strategyName: 'WebView');
     } catch (e) {
-      print('WebView extraction failed for $url: $e');
+      print('   ❌ WebView extraction failed: $e');
       return null;
     }
   }
@@ -526,6 +539,8 @@ class Readability4JExtended {
       final cookieHeader = await _cookieHeaderBuilder!(url);
       if (cookieHeader != null && cookieHeader.isNotEmpty) {
         headers['Cookie'] = cookieHeader;
+        final cookieCount = cookieHeader.split(';').length;
+        print('   🍪 Using $cookieCount cookies in HTTP request');
       }
     }
 
