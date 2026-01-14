@@ -526,7 +526,7 @@ Future<void> _speakNextLineGlobal({bool auto = false}) async {
     final loaded = await _loadNextArticleGlobal();
     if (loaded) {
       // Successfully loaded next article, continue playing
-      await _speakCurrentLineGlobal(stopFirst: !auto);
+      await _speakCurrentLineGlobal(auto: true);
     } else {
       // No more articles, stop playing
       state.isPlaying = false;
@@ -538,11 +538,11 @@ Future<void> _speakNextLineGlobal({bool auto = false}) async {
   }
 
   state.currentLine = nextLine;
-  await _speakCurrentLineGlobal(stopFirst: !auto);
+  await _speakCurrentLineGlobal(auto: auto);
 }
 
 // Global function to speak current line
-Future<void> _speakCurrentLineGlobal({bool stopFirst = true}) async {
+Future<void> _speakCurrentLineGlobal({bool auto = false}) async {
   final state = _TtsState.instance;
   if (state.lines.isEmpty || state.currentLine >= state.lines.length || state.currentLine < 0) {
     return;
@@ -555,8 +555,11 @@ Future<void> _speakCurrentLineGlobal({bool stopFirst = true}) async {
   }
 
   state.isPlaying = true;
-  await _showReadingNotificationGlobal(text);
-  if (stopFirst) {
+  // Update notification without awaiting to avoid delays during auto-advance
+  unawaited(_showReadingNotificationGlobal(text));
+  // Only stop TTS when starting fresh (not auto-advancing)
+  // When auto-advancing, TTS has already completed so no need to stop
+  if (!auto) {
     await _globalTts.stop();
   }
   // Speech rate should already be set by the widget, but ensure it's set
@@ -2345,7 +2348,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
     return raw.toString();
   }
-  Future<void> _speakCurrentLine({bool stopFirst = true}) async {
+  Future<void> _speakCurrentLine({bool auto = false}) async {
     _cancelAutoAdvanceTimer();
     await _ensureLinesLoaded();
     if (_lines.isEmpty) return;
@@ -2376,7 +2379,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     // Set TTS language to match the article's primary language (or translation language)
     // This ensures the SAME voice is used throughout the entire article
-    await _applyTtsLocale(ttsLanguageCode);
+    // Only apply locale on first line or when not auto-advancing to avoid delays
+    if (!auto || !_isPlaying) {
+      await _applyTtsLocale(ttsLanguageCode);
+    }
 
     // Mark article as read when starting to speak (first time)
     if (!_isPlaying && widget.articleId != null) {
@@ -2384,7 +2390,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     // Highlight current line in reader mode (if setting ON)
-    await _highlightLine(_currentLine);
+    // Use unawaited for auto-advance to prevent delays
+    if (auto && _isPlaying) {
+      unawaited(_highlightLine(_currentLine));
+    } else {
+      await _highlightLine(_currentLine);
+    }
 
     // Sync global state with local lines
     _ttsState.lines = _lines;
@@ -2403,12 +2414,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       }
     }
 
-    // Stop any currently playing TTS first (before setting state)
-    if (stopFirst) {
+    // Only stop TTS and apply settings when starting fresh (not auto-advancing)
+    // When auto-advancing, TTS has already completed so no need to stop
+    if (!auto) {
       await _globalTts.stop();
+      await _applySpeechRateFromSettings(restartIfPlaying: false);
     }
-    // Apply speech rate but don't restart (we're about to speak anyway)
-    await _applySpeechRateFromSettings(restartIfPlaying: false);
 
     // Now set playing state and start speaking
     setState(() {
@@ -2416,20 +2427,24 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       _webHighlightText = null;
     });
 
-    // Enable WakeLock to keep screen on during TTS playback
-    try {
-      await WakelockPlus.enable();
-      debugPrint('TTS: 🔒 WakeLock enabled - screen will stay on during playback');
-    } catch (e) {
-      debugPrint('TTS: ⚠️ Failed to enable WakeLock: $e');
+    // Enable WakeLock only when starting fresh (not on every line)
+    if (!auto || !_isPlaying) {
+      try {
+        await WakelockPlus.enable();
+        debugPrint('TTS: 🔒 WakeLock enabled - screen will stay on during playback');
+      } catch (e) {
+        debugPrint('TTS: ⚠️ Failed to enable WakeLock: $e');
+      }
     }
 
-    // Start periodic position saving during playback
-    _startPeriodicSave();
-    // Start periodic highlight syncing to catch global state changes
-    _startPeriodicHighlightSync();
+    // Start periodic position saving during playback (only on first line)
+    if (!auto) {
+      _startPeriodicSave();
+      _startPeriodicHighlightSync();
+    }
     _lastSyncedLine = _currentLine;
-    await _showReadingNotification(text);
+    // Update notification without awaiting to avoid delays during auto-advance
+    unawaited(_showReadingNotification(text));
     await _globalTts.speak(text);
   }
 
@@ -2485,7 +2500,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     setState(() => _currentLine = i);
     // Auto-save position after moving to new line
     unawaited(_saveReadingPosition());
-    await _speakCurrentLine(stopFirst: !auto);
+    await _speakCurrentLine(auto: auto);
   }
 
   Future<void> _speakPrevLine() async {
@@ -2506,7 +2521,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     setState(() => _currentLine = i);
     // Auto-save position after moving to previous line
     unawaited(_saveReadingPosition());
-    await _speakCurrentLine(stopFirst: !auto);
+    await _speakCurrentLine();
   }
 
   Future<void> _stopSpeaking() async {
