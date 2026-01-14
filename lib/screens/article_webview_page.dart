@@ -689,6 +689,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _isTranslatedView = false;
   TranslateLanguage? _srcLangDetected;
   String? _articlePrimaryLanguage; // Primary language for this article (detected once, used throughout)
+  String? _cachedTtsLanguageCode; // Cached TTS language code to avoid repeated detection
   SettingsProvider? _settings;
   VoidCallback? _settingsListener;
   static const int _readingNotificationId = 22;
@@ -891,6 +892,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       // Clear article language cache for new article
       _articlePrimaryLanguage = null;
+      _cachedTtsLanguageCode = null;
       _languageCache.clear();
     }
 
@@ -1803,6 +1805,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         });
         // Reset article language detection when un-translating
         _articlePrimaryLanguage = null;
+        _cachedTtsLanguageCode = null;
         // Update TTS state for speed settings
         _ttsState.isTranslatedContent = false;
 
@@ -1870,6 +1873,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     // Reset article language detection when translating
     // This ensures the translated language is used consistently
     _articlePrimaryLanguage = null;
+    _cachedTtsLanguageCode = null;
     // Update TTS state for speed settings
     _ttsState.isTranslatedContent = true;
 
@@ -2052,6 +2056,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
       // Reset article language detection when translating
       _articlePrimaryLanguage = null;
+      _cachedTtsLanguageCode = null;
       // Update TTS state for speed settings
       _ttsState.isTranslatedContent = true;
 
@@ -2350,7 +2355,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   }
   Future<void> _speakCurrentLine({bool auto = false}) async {
     _cancelAutoAdvanceTimer();
-    await _ensureLinesLoaded();
+    // Only load lines on first play, not during auto-advance (optimization)
+    if (!auto) {
+      await _ensureLinesLoaded();
+    }
     if (_lines.isEmpty) return;
     if (_currentLine < 0 || _currentLine >= _lines.length) return;
 
@@ -2371,8 +2379,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       ttsLanguageCode = targetCode;
       text = _normalizeForTts(text, targetCode);
     } else {
-      // Use the article's primary language (detected once, consistent throughout)
-      ttsLanguageCode = await _detectArticlePrimaryLanguage();
+      // Use cached language code to avoid repeated detection (optimization)
+      if (_cachedTtsLanguageCode == null) {
+        _cachedTtsLanguageCode = await _detectArticlePrimaryLanguage();
+      }
+      ttsLanguageCode = _cachedTtsLanguageCode!;
       // Normalize text for the article's language
       text = _normalizeForTts(text, ttsLanguageCode);
     }
