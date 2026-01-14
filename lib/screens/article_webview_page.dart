@@ -742,17 +742,20 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     } else {
       // Web mode highlighting
       if (index < 0 || index >= _lines.length) return;
-      final text = _lines[index].trim();
-      if (text.isEmpty) return;
+      final candidates = _webHighlightCandidates(index);
+      if (candidates.isEmpty) return;
 
       if (mounted) {
-        setState(() => _webHighlightText = text);
+        setState(() => _webHighlightText = candidates.first);
       }
 
-      try {
-        await _highlightInWebPage(text);
-      } catch (e) {
-        // Silently continue
+      for (final text in candidates) {
+        try {
+          final success = await _highlightInWebPage(text);
+          if (success) break;
+        } catch (e) {
+          // Silently continue to next candidate
+        }
       }
     }
   }
@@ -1226,42 +1229,71 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     } else {
       // Web mode highlighting with overlay
       if (index < 0 || index >= _lines.length) return;
-      final text = _lines[index].trim();
-      if (text.isEmpty) return;
+      final candidates = _webHighlightCandidates(index);
+      if (candidates.isEmpty) return;
 
       if (mounted) {
-        setState(() => _webHighlightText = text);
+        setState(() => _webHighlightText = candidates.first);
       }
 
       // During active playback, highlight immediately without delay
       if (_isPlaying) {
-        try {
-          await _highlightInWebPage(text);
-        } catch (e) {
-          // Silently continue - next line will try again
+        for (final text in candidates) {
+          try {
+            final success = await _highlightInWebPage(text);
+            if (success) break;
+          } catch (e) {
+            // Silently continue - try next candidate
+          }
         }
       } else {
         // When not playing, add delay for page load
         await Future.delayed(const Duration(milliseconds: 100));
         // Check if this operation has been superseded
         if (mounted && !_readerOn && _highlightSequence == currentSequence) {
-          try {
-            await _highlightInWebPage(text);
-          } catch (e) {
-            // Silently continue
+          for (final text in candidates) {
+            try {
+              final success = await _highlightInWebPage(text);
+              if (success) break;
+            } catch (e) {
+              // Silently continue - try next candidate
+            }
           }
         }
       }
     }
   }
 
-  Future<void> _highlightInWebPage(String text) async {
+  List<String> _webHighlightCandidates(int index) {
+    if (index < 0 || index >= _lines.length) return [];
+    final primary = _isTranslatedView &&
+            _originalLinesCache != null &&
+            index < _originalLinesCache!.length
+        ? _originalLinesCache![index].trim()
+        : _lines[index].trim();
+    if (primary.isEmpty) return [];
+    final candidates = <String>[primary];
+    final translated = _lines[index].trim();
+    if (translated.isNotEmpty && translated != primary) {
+      candidates.add(translated);
+    }
+    return candidates;
+  }
+
+  Future<bool> _highlightInWebPage(String text) async {
     try {
       final escaped = jsonEncode(text);
       final script = '''
 (function(txt){
-  if(!txt){return;}
+  if(!txt){return false;}
   const cls='flutter-tts-highlight';
+  const styleId = 'flutter-tts-highlight-style';
+  if(!document.getElementById(styleId)){
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = 'mark.'+cls+'{background:rgba(255,235,59,0.6) !important;color:inherit !important;padding:0 0.12em;border-radius:0.12em;}';
+    document.head.appendChild(style);
+  }
 
   // Remove old highlights - unwrap mark elements back to text nodes
   document.querySelectorAll('mark.'+cls).forEach(m=>{
@@ -1401,7 +1433,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     const originalEnd = (map[searchIndex + searchText.length - 1] || originalStart) + 1;
 
     if(highlightRange(textInfo, originalStart, originalEnd)){
-      return; // Successfully highlighted
+      return true; // Successfully highlighted
     }
   }
 
@@ -1424,15 +1456,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       const originalEnd = match.index + match[0].length;
 
       if(highlightRange(textInfo, originalStart, originalEnd)){
-        return;
+        return true;
       }
     }
   }
+  return false;
 })($escaped);
 ''';
-      await _controller.runJavaScript(script);
+      final result = await _controller.runJavaScriptReturningResult(script);
+      return result == true || result.toString() == 'true';
     } catch (_) {
       // ignore failures silently
+      return false;
     }
   }
 
@@ -1471,7 +1506,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         '.wrap{max-width:760px;margin:0 auto;padding:16px;}'
         'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}'
         'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}'
-        'p.hl{background-color:rgba(255,235,59,0.4);}'
+        'p.hl{background-color:rgba(255,235,59,0.4) !important;}'
         // treat first line (index 0) as header
         'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:1.2rem;}'
         '</style>');
