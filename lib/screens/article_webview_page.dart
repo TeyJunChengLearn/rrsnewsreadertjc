@@ -2421,11 +2421,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       await _applySpeechRateFromSettings(restartIfPlaying: false);
     }
 
-    // Now set playing state and start speaking
-    setState(() {
-      _isPlaying = true;
-      _webHighlightText = null;
-    });
+    // Only set playing state when starting fresh (not auto-advancing)
+    // During auto-advance, these values are already set, so skip rebuild
+    if (!auto || !_isPlaying) {
+      setState(() {
+        _isPlaying = true;
+        _webHighlightText = null;
+      });
+    }
 
     // Enable WakeLock only when starting fresh (not on every line)
     if (!auto || !_isPlaying) {
