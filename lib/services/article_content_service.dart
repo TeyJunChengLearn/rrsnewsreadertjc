@@ -52,7 +52,12 @@ class ArticleContentService {
       print('   ✓ Extracted ${extractedLength} chars (source: ${content.source})');
 
       if (extractedLength < 150) {
-        print('   ⚠️ Content too short (< 150 chars), likely incomplete');
+        print('   ⚠️ WARNING: Content too short (< 150 chars), likely incomplete or paywalled');
+        print('   ⚠️ This may indicate cookies are not working or content not fully loaded');
+      } else if (extractedLength < 500) {
+        print('   ℹ️ Content short (< 500 chars), may be just RSS teaser rather than full article');
+      } else {
+        print('   ✓ Content length looks good (${extractedLength} chars)');
       }
 
       final updates = <String, String?>{};

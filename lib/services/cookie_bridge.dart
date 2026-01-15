@@ -9,13 +9,20 @@ class CookieBridge {
   /// Returns the Cookie header value for the given [url], if available.
   Future<String?> buildHeader(String url) async {
     try {
+      print('CookieBridge: Fetching cookies for $url');
       final cookie = await _channel.invokeMethod<String>(
         'getCookies',
         {'url': url},
       );
-      if (cookie == null || cookie.isEmpty) return null;
+      if (cookie == null || cookie.isEmpty) {
+        print('CookieBridge: ⚠️ No cookies found for $url');
+        return null;
+      }
+      final cookieCount = cookie.split(';').length;
+      print('CookieBridge: ✓ Found $cookieCount cookies for $url');
       return cookie;
-    } on Exception catch (_) {
+    } on Exception catch (e) {
+      print('CookieBridge: ❌ Error fetching cookies: $e');
       return null;
     }
   }

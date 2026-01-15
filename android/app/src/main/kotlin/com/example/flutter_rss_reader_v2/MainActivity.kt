@@ -456,7 +456,7 @@ class MainActivity : FlutterActivity() {
     ) {
         val pollIntervalMs = 500L  // Check every 500ms
         val minAttempts = (maxWaitMs / pollIntervalMs).toInt().coerceAtLeast(6)  // Minimum attempts based on delay
-        val absoluteMaxAttempts = 40  // Absolute maximum: 20 seconds total
+        val absoluteMaxAttempts = 60  // Absolute maximum: 30 seconds total (increased from 20s)
         val stabilityRequired = 4  // Content must be stable for 2 seconds (4 × 500ms)
 
         // JavaScript to check if article content has loaded
@@ -506,8 +506,9 @@ class MainActivity : FlutterActivity() {
                 val paragraphCount = json.optInt("paragraphCount", 0)
                 val totalTextLength = json.optInt("totalTextLength", 0)
 
-                // Check if we have minimum viable content
-                val hasMinimumContent = paragraphCount >= 5 && totalTextLength >= 800
+                // Increased minimum content threshold for better full content capture
+                // Was: 5 paragraphs, 800 chars → Now: 8 paragraphs, 1500 chars
+                val hasMinimumContent = paragraphCount >= 8 && totalTextLength >= 1500
 
                 // Check if content has stopped changing (stability detection)
                 val contentStable = totalTextLength == previousLength && totalTextLength > 0

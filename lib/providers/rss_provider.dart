@@ -315,16 +315,23 @@ static const int _maxRetries = 3; // Maximum retry attempts
     }
   }
   Future<void> backfillArticleContent() async {
-    if (_backfillInProgress) return;
+    if (_backfillInProgress) {
+      debugPrint('RssProvider: Enrichment already in progress, skipping');
+      return;
+    }
     _backfillInProgress = true;
     _shouldCancelBackfill = false;
 
     // Enable wakelock to prevent screen from turning off during enrichment
+    // This keeps the CPU running even when the screen auto-locks
     try {
+      final wasEnabled = await WakelockPlus.enabled;
       await WakelockPlus.enable();
-      debugPrint('RssProvider: 🔒 WakeLock enabled - screen will stay on during enrichment');
+      debugPrint('RssProvider: 🔒 WakeLock enabled (was: $wasEnabled) - device will stay awake during enrichment');
+      debugPrint('RssProvider: 📱 Enrichment will continue even if screen turns off');
     } catch (e) {
       debugPrint('RssProvider: ⚠️ Failed to enable WakeLock: $e');
+      debugPrint('RssProvider: ⚠️ Enrichment may be interrupted if device goes to sleep');
     }
 
     try {
@@ -402,7 +409,11 @@ static const int _maxRetries = 3; // Maximum retry attempts
 
         // Enrich this article
         try {
-          debugPrint('RssProvider: [$processedCount/${sortedItems.length}] 📖 NOW ENRICHING: "${item.title}" (Date: ${item.pubDate})');
+          final progress = '${(processedCount / sortedItems.length * 100).toStringAsFixed(1)}%';
+          debugPrint('RssProvider: [$processedCount/${sortedItems.length}] ($progress) 📖 NOW ENRICHING: "${item.title}"');
+          debugPrint('RssProvider: 🔗 URL: ${item.link}');
+          debugPrint('RssProvider: 📅 Date: ${item.pubDate}');
+          debugPrint('RssProvider: 🔄 Attempt: ${item.enrichmentAttempts + 1}/5');
           final content = await repo.populateArticleContent([item]);
 
           // Check cancellation after network call
@@ -513,8 +524,15 @@ static const int _maxRetries = 3; // Maximum retry attempts
 
       // Disable wakelock when enrichment is done
       try {
-        await WakelockPlus.disable();
-        debugPrint('RssProvider: 🔓 WakeLock disabled - screen can turn off now');
+        final wasEnabled = await WakelockPlus.enabled;
+        if (wasEnabled) {
+          await WakelockPlus.disable();
+          debugPrint('RssProvider: 🔓 WakeLock disabled - screen can turn off now');
+          debugPrint('RssProvider: ✓ Enrichment completed successfully');
+        } else {
+          debugPrint('RssProvider: ⚠️ WakeLock was already disabled (unexpected!)');
+          debugPrint('RssProvider: ⚠️ This may indicate the device went to sleep during enrichment');
+        }
       } catch (e) {
         debugPrint('RssProvider: ⚠️ Failed to disable WakeLock: $e');
       }
