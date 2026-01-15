@@ -13,7 +13,7 @@ class AndroidWebViewExtractor {
   /// If rendering fails or times out, `null` is returned.
   Future<String?> renderPage(
     String url, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 25),  // Increased to accommodate longer delays
     Duration postLoadDelay = Duration.zero,
     String? userAgent,
     String? cookieHeader,
@@ -45,7 +45,7 @@ class AndroidWebViewExtractor {
   }
   Future<String?> renderPageEnhanced(
     String url, {
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 30),  // Increased to accommodate longer delays
     Duration postLoadDelay = const Duration(seconds: 3),
     String? userAgent,
     String? cookieHeader,

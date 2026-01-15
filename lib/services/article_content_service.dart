@@ -197,28 +197,30 @@ int _getOptimalDelay(String url) {
 
     // Malaysian news sites with heavy JavaScript/authentication
     // These need longer delays to fully load subscriber content
+    // Increased delays to ensure full content capture
     const heavyJsSites = {
-      'malaysiakini.com': 6000,      // Malaysiakini needs 6 seconds for auth
-      'mkini.bz': 6000,               // Malaysiakini short domain
-      'hmetro.com.my': 5000,          // Harian Metro
-      'harakahdaily.net': 5000,       // Harakah Daily
-      'sinchew.com.my': 5000,         // Sin Chew Daily
-      'orientaldaily.com.my': 5000,   // Oriental Daily
-      'freemalaysiatoday.com': 4000,  // FMT
+      'malaysiakini.com': 8000,      // Malaysiakini needs 8 seconds for auth and full content
+      'mkini.bz': 8000,               // Malaysiakini short domain
+      'hmetro.com.my': 7000,          // Harian Metro - increased for full content
+      'harakahdaily.net': 7000,       // Harakah Daily - increased for full content
+      'sinchew.com.my': 7000,         // Sin Chew Daily - increased for full content
+      'orientaldaily.com.my': 7000,   // Oriental Daily - increased for full content
+      'freemalaysiatoday.com': 6000,  // FMT - increased for full content
     };
 
     // International paywall sites
     // These also need extra time for authentication checks
+    // Increased delays to ensure full content capture
     const internationalPaywalls = {
-      'nytimes.com': 5000,
-      'wsj.com': 5000,
-      'bloomberg.com': 4000,
-      'ft.com': 5000,
-      'economist.com': 4000,
-      'washingtonpost.com': 4000,
-      'medium.com': 3000,
-      'wired.com': 3000,
-      'theatlantic.com': 3000,
+      'nytimes.com': 7000,        // Increased for full content
+      'wsj.com': 7000,            // Increased for full content
+      'bloomberg.com': 6000,      // Increased for full content
+      'ft.com': 7000,             // Increased for full content
+      'economist.com': 6000,      // Increased for full content
+      'washingtonpost.com': 6000, // Increased for full content
+      'medium.com': 5000,         // Increased for full content
+      'wired.com': 5000,          // Increased for full content
+      'theatlantic.com': 5000,    // Increased for full content
     };
 
     // Check Malaysian sites first (higher priority)
@@ -235,8 +237,8 @@ int _getOptimalDelay(String url) {
       }
     }
 
-    // Default delay for other paywalled sites
-    return 3000;
+    // Default delay for other paywalled sites (increased for better content capture)
+    return 5000;
   } catch (_) {
     return 3000; // Default 3 seconds
   }

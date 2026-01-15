@@ -108,8 +108,12 @@ class MainActivity : FlutterActivity() {
                             android.util.Log.d("CookieBridge", "  No cookies to apply (cookieHeader is empty)")
                         }
 
+                        // Apply cookies and ensure they're persisted
                         applyCookieHeader(url, cookieHeader, cookieManager)
                         cookieManager.flush()
+
+                        // Give cookies time to persist (critical for authentication)
+                        Thread.sleep(300)
 
                         // Verify cookies were set
                         val verifyString = cookieManager.getCookie(url)
@@ -135,12 +139,12 @@ class MainActivity : FlutterActivity() {
                             override fun onPageFinished(view: WebView, finishedUrl: String) {
                                 if (completed) return
 
-                                // Use automatic content detection instead of fixed delay
+                                // Use automatic content detection with respect to postLoadDelay
                                 // Execute paywall cleanup immediately, then wait for content
                                 val paywallRemovalScript = """
                                     (function() {
                                         // Remove common paywall UI elements
-                                        document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], .overlay, .modal-backdrop').forEach(el => el.remove());
+                                        document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], [class*="subscription"], .overlay, .modal-backdrop, .tp-modal, .tp-backdrop').forEach(el => el.remove());
 
                                         // Remove blur effects
                                         document.querySelectorAll('*').forEach(el => {
@@ -152,30 +156,39 @@ class MainActivity : FlutterActivity() {
                                         });
 
                                         // Unhide elements that might contain subscriber content
-                                        document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"]').forEach(el => {
+                                        document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"], .paywalled-content').forEach(el => {
                                             el.style.display = 'block';
                                             el.style.visibility = 'visible';
                                             el.style.opacity = '1';
                                             el.style.height = 'auto';
+                                            el.style.maxHeight = 'none';
                                         });
 
                                         // Re-enable scrolling (some paywalls disable it)
                                         document.body.style.overflow = 'auto';
                                         document.documentElement.style.overflow = 'auto';
 
+                                        // Remove iframe overlays
+                                        document.querySelectorAll('iframe').forEach(iframe => {
+                                            const src = iframe.src || '';
+                                            if (src.includes('paywall') || src.includes('subscribe') || src.includes('piano.io')) {
+                                                iframe.remove();
+                                            }
+                                        });
+
                                         return 'cleanup-done';
                                     })();
                                 """.trimIndent()
 
-                                android.util.Log.d("CookieBridge", "  ⏱ Page finished loading, waiting for article content...")
+                                android.util.Log.d("CookieBridge", "  ⏱ Page finished loading, waiting for article content (max ${postLoadDelayMs}ms)...")
 
                                 // First execute cleanup, then wait for content to load
                                 view.evaluateJavascript(paywallRemovalScript) { _ ->
                                     if (completed) return@evaluateJavascript
 
                                     // Wait for article content to actually appear in the DOM
-                                    // This automatically detects when content is ready (no fixed delay)
-                                    waitForArticleContent(view, handler, 0) { contentReady ->
+                                    // Use postLoadDelay as the maximum wait time
+                                    waitForArticleContent(view, handler, 0, postLoadDelayMs) { contentReady ->
                                         if (completed) return@waitForArticleContent
 
                                         if (contentReady) {
@@ -419,15 +432,17 @@ class MainActivity : FlutterActivity() {
     /**
      * Waits for article content to appear in the DOM by polling for paragraphs with substantial text.
      * This prevents capturing HTML before JavaScript-loaded content is rendered.
+     * @param maxWaitMs Maximum time to wait for content (from postLoadDelay)
      */
     private fun waitForArticleContent(
         webView: WebView,
         handler: Handler,
         attemptCount: Int,
+        maxWaitMs: Int,
         callback: (Boolean) -> Unit
     ) {
-        val maxAttempts = 10  // Poll up to 10 times
         val pollIntervalMs = 500L  // Check every 500ms
+        val maxAttempts = (maxWaitMs / pollIntervalMs).toInt().coerceAtLeast(10)  // At least 10 attempts
 
         // JavaScript to check if article content has loaded
         val contentCheckScript = """
@@ -461,8 +476,9 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // Consider content loaded if we have at least 3 paragraphs with 500+ total chars
-                const hasContent = paragraphCount >= 3 && totalTextLength >= 500;
+                // Consider content loaded if we have at least 5 paragraphs with 800+ total chars
+                // More strict criteria to ensure full content is loaded
+                const hasContent = paragraphCount >= 5 && totalTextLength >= 800;
 
                 return JSON.stringify({
                     hasContent: hasContent,
@@ -492,7 +508,7 @@ class MainActivity : FlutterActivity() {
                 } else {
                     // Try again after delay
                     handler.postDelayed({
-                        waitForArticleContent(webView, handler, attemptCount + 1, callback)
+                        waitForArticleContent(webView, handler, attemptCount + 1, maxWaitMs, callback)
                     }, pollIntervalMs)
                 }
             } catch (e: Exception) {
