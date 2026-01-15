@@ -371,13 +371,21 @@ class Readability4JExtended {
       // Get cookies for authentication
       String? cookieHeader;
       if (_cookieHeaderBuilder != null) {
+        print('   🔍 Attempting to fetch cookies for: $url');
         cookieHeader = await _cookieHeaderBuilder!(url);
         if (cookieHeader != null && cookieHeader.isNotEmpty) {
           final cookieCount = cookieHeader.split(';').length;
+          final cookieNames = cookieHeader.split(';').map((c) => c.trim().split('=')[0]).join(', ');
           print('   🍪 Using $cookieCount cookies for authentication');
+          print('   🍪 Cookie names: $cookieNames');
+          print('   🍪 Cookie preview: ${cookieHeader.length > 100 ? cookieHeader.substring(0, 100) + '...' : cookieHeader}');
         } else {
-          print('   ⚠️ No cookies available - may not access subscriber content');
+          print('   ⚠️ WARNING: No cookies available for $url');
+          print('   ⚠️ This may prevent access to subscriber-only content!');
+          print('   ⚠️ Make sure you\'re logged in via the WebView first.');
         }
+      } else {
+        print('   ⚠️ WARNING: No cookie header builder configured!');
       }
 
       print('   🌐 Rendering in WebView (delay: ${delayMs}ms)...');
@@ -536,12 +544,19 @@ class Readability4JExtended {
 
     // Add cookies if builder is available
     if (_cookieHeaderBuilder != null) {
+      print('   🔍 Fetching cookies for HTTP request: $url');
       final cookieHeader = await _cookieHeaderBuilder!(url);
       if (cookieHeader != null && cookieHeader.isNotEmpty) {
         headers['Cookie'] = cookieHeader;
         final cookieCount = cookieHeader.split(';').length;
+        final cookieNames = cookieHeader.split(';').map((c) => c.trim().split('=')[0]).join(', ');
         print('   🍪 Using $cookieCount cookies in HTTP request');
+        print('   🍪 Cookie names: $cookieNames');
+      } else {
+        print('   ⚠️ No cookies found for HTTP request to $url');
       }
+    } else {
+      print('   ℹ️ No cookie builder configured for HTTP requests');
     }
 
     return headers;
