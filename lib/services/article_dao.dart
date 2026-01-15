@@ -179,6 +179,20 @@ class ArticleDao {
     );
   }
 
+  /// Reset enrichment status - clears mainText and resets enrichmentAttempts to 0
+  Future<void> resetEnrichment(String id) async {
+    final db = await _dbService.database;
+    await db.update(
+      'articles',
+      {
+        'mainText': null,
+        'enrichmentAttempts': 0,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   /// Get all hidden/trashed articles (isRead == 2)
   Future<List<FeedItem>> getHiddenArticles() async {
     final db = await _dbService.database;

@@ -249,6 +249,30 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
   Future<void> markUnread(FeedItem item) async {
     await markRead(item, read: 0);
   }
+
+  /// Reset enrichment for an article and mark it as unread
+  /// This triggers re-enrichment for articles with incomplete content
+  Future<void> resetEnrichment(FeedItem item) async {
+    final idx = _items.indexWhere((e) => e.id == item.id);
+    if (idx == -1) return;
+
+    // Update local state: mark as unread and clear enrichment data
+    final updated = item.copyWith(
+      isRead: 0,
+      mainText: '',
+      enrichmentAttempts: 0,
+    );
+    _items[idx] = updated;
+    notifyListeners();
+
+    // Persist to database
+    await repo.setRead(item.id, 0);
+    await repo.resetEnrichment(item.id);
+
+    // Trigger enrichment restart with new priority
+    _restartBackfillWithNewPriority();
+  }
+
   Future<void> hideOlderThan(FeedItem item) async {
     final cutoff = item.pubDate;
     if (cutoff == null) return;
