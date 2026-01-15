@@ -657,6 +657,12 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   // Language detection cache: maps line index to detected language code
   final Map<int, String> _languageCache = {};
 
+  // Error handling state
+  bool _hasLoadError = false;
+  String _errorMessage = '';
+  int _retryCount = 0;
+  Timer? _loadTimeoutTimer;
+
   // Use global state for TTS (persists after dispose)
   _TtsState get _ttsState => _TtsState.instance;
   int get _currentLine => _ttsState.currentLine;
@@ -1065,12 +1071,24 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) {
+          onPageStarted: (url) {
             if (!mounted || _disposed) return;
-            setState(() => _isLoading = true);
+            setState(() {
+              _isLoading = true;
+              _hasLoadError = false;
+              _errorMessage = '';
+            });
+
+            // Start timeout timer (30 seconds)
+            _loadTimeoutTimer?.cancel();
+            _loadTimeoutTimer = Timer(const Duration(seconds: 30), () {
+              if (!mounted || _disposed || !_isLoading) return;
+              _handleLoadError('Page load timeout. Please try again.');
+            });
           },
           onPageFinished: (url) async {
             if (!mounted || _disposed) return;
+            _loadTimeoutTimer?.cancel();
             setState(() => _isLoading = false);
 
             // Automatically remove paywall overlays when page finishes loading
@@ -1079,11 +1097,89 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
             if (!mounted || _disposed) return;
             await _removePaywallOverlays();
           },
+          onWebResourceError: (WebResourceError error) {
+            if (!mounted || _disposed) return;
+            _loadTimeoutTimer?.cancel();
+
+            // Ignore errors for subresources (images, scripts, etc.)
+            // Only handle main frame errors that cause blank pages
+            if (error.errorType == WebResourceErrorType.hostLookup ||
+                error.errorType == WebResourceErrorType.timeout ||
+                error.errorType == WebResourceErrorType.connect ||
+                error.errorType == WebResourceErrorType.unsupportedScheme) {
+              _handleLoadError(error.description);
+            }
+          },
+          onHttpError: (HttpResponseError error) {
+            if (!mounted || _disposed) return;
+            _loadTimeoutTimer?.cancel();
+
+            // Handle HTTP errors (4xx, 5xx)
+            if (error.response?.statusCode != null &&
+                error.response!.statusCode! >= 400) {
+              _handleLoadError(
+                'HTTP ${error.response!.statusCode}: Unable to load page',
+              );
+            }
+          },
         ),
       );
 
-    // Default: show full website
-    _controller.loadRequest(Uri.parse(widget.url));
+    // Set background color for better loading experience
+    _controller.setBackgroundColor(Colors.white);
+
+    // Delay initial load slightly to ensure WebView is fully ready
+    // This prevents race conditions on some Android devices
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (!mounted || _disposed) return;
+      _loadUrl();
+    });
+  }
+
+  /// Load or reload the current URL with error handling
+  void _loadUrl() {
+    if (_disposed) return;
+
+    try {
+      _controller.loadRequest(Uri.parse(widget.url));
+    } catch (e) {
+      _handleLoadError('Failed to load URL: $e');
+    }
+  }
+
+  /// Handle WebView load errors with retry capability
+  void _handleLoadError(String error) {
+    if (!mounted || _disposed) return;
+
+    debugPrint('WebView Error: $error (retry count: $_retryCount)');
+
+    setState(() {
+      _isLoading = false;
+      _hasLoadError = true;
+      _errorMessage = error;
+    });
+
+    // Auto-retry once for transient errors (network glitches, etc.)
+    if (_retryCount == 0) {
+      _retryCount++;
+      Future.delayed(const Duration(seconds: 2), () {
+        if (!mounted || _disposed || !_hasLoadError) return;
+        debugPrint('Auto-retrying WebView load...');
+        _retryLoadPage();
+      });
+    }
+  }
+
+  /// Retry loading the page
+  void _retryLoadPage() {
+    if (_disposed) return;
+
+    setState(() {
+      _hasLoadError = false;
+      _errorMessage = '';
+    });
+
+    _loadUrl();
   }
 
   Future<void> _initNotifications() async {
@@ -3035,6 +3131,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _cancelAutoAdvanceTimer();
     _cancelPeriodicSave();
     _cancelPeriodicHighlightSync();
+    _loadTimeoutTimer?.cancel();
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
     }
@@ -3147,6 +3244,79 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
                                 color: Theme.of(context).colorScheme.onSurface,
                               ),
                             ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // Error overlay with retry button
+            if (_hasLoadError)
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.all(24),
+                  child: Material(
+                    elevation: 8,
+                    borderRadius: BorderRadius.circular(16),
+                    color: Colors.red.shade50.withOpacity(0.98),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.error_outline, size: 64, color: Colors.red.shade700),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Failed to Load Page',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red.shade900,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _errorMessage.isNotEmpty
+                                ? _errorMessage
+                                : 'An error occurred while loading the page.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.red.shade800,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: _retryLoadPage,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red.shade700,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              OutlinedButton.icon(
+                                onPressed: () => Navigator.of(context).maybePop(),
+                                icon: const Icon(Icons.arrow_back),
+                                label: const Text('Go Back'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red.shade700,
+                                  side: BorderSide(color: Colors.red.shade700),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
