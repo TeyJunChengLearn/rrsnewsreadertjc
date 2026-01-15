@@ -924,6 +924,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         // Open in reader mode (summary view)
         setState(() => _readerOn = true);
         await _loadReaderContent();
+      } else {
+        // Load webview URL when not opening in reader mode
+        await _controller.loadRequest(Uri.parse(widget.url));
       }
 
       await _ensureLinesLoaded();
@@ -1082,8 +1085,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         ),
       );
 
-    // Default: show full website
-    _controller.loadRequest(Uri.parse(widget.url));
+    // Don't load URL immediately - let initState determine whether to load
+    // reader content or webview based on settings and content availability
+    // This prevents unnecessary double-loading and race conditions
   }
 
   Future<void> _initNotifications() async {
@@ -1150,10 +1154,14 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
+      // Content not available - fall back to webview mode
       if (mounted) {
-        _readerOn = false;
-        _isLoading = false;
+        setState(() {
+          _readerOn = false;
+          _isLoading = false;
+        });
       }
+      // Load the original URL in webview
       await _controller.loadRequest(Uri.parse(widget.url));
       return;
     }
@@ -2192,14 +2200,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final text = (result?.mainText ?? '').trim();
     final pagePaywalled = result?.isPaywalled ?? false;
     if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Reader text is still loading. Please wait while it finishes in the background.',
-          ),
-          duration: const Duration(seconds: 5),
-        ),
-      );
+      // Content not extracted yet - silently continue with webview mode
+      // Only show message if user explicitly tried to use reader features
       setState(() {
         _paywallLikely = false;
         _lines.clear();
