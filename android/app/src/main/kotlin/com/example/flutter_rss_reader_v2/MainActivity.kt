@@ -432,7 +432,8 @@ class MainActivity : FlutterActivity() {
     /**
      * Waits for article content to appear in the DOM by polling for paragraphs with substantial text.
      * This prevents capturing HTML before JavaScript-loaded content is rendered.
-     * @param maxWaitMs Maximum time to wait for content (from postLoadDelay)
+     * Uses content stability detection - waits until content stops changing.
+     * @param maxWaitMs Minimum time to wait for content (from postLoadDelay)
      */
     private fun waitForArticleContent(
         webView: WebView,
@@ -441,8 +442,22 @@ class MainActivity : FlutterActivity() {
         maxWaitMs: Int,
         callback: (Boolean) -> Unit
     ) {
+        waitForArticleContentWithStability(webView, handler, attemptCount, maxWaitMs, -1, 0, callback)
+    }
+
+    private fun waitForArticleContentWithStability(
+        webView: WebView,
+        handler: Handler,
+        attemptCount: Int,
+        maxWaitMs: Int,
+        previousLength: Int,
+        stabilityCount: Int,
+        callback: (Boolean) -> Unit
+    ) {
         val pollIntervalMs = 500L  // Check every 500ms
-        val maxAttempts = (maxWaitMs / pollIntervalMs).toInt().coerceAtLeast(10)  // At least 10 attempts
+        val minAttempts = (maxWaitMs / pollIntervalMs).toInt().coerceAtLeast(6)  // Minimum attempts based on delay
+        val absoluteMaxAttempts = 40  // Absolute maximum: 20 seconds total
+        val stabilityRequired = 4  // Content must be stable for 2 seconds (4 × 500ms)
 
         // JavaScript to check if article content has loaded
         val contentCheckScript = """
@@ -476,12 +491,8 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // Consider content loaded if we have at least 5 paragraphs with 800+ total chars
-                // More strict criteria to ensure full content is loaded
-                const hasContent = paragraphCount >= 5 && totalTextLength >= 800;
-
+                // Return content metrics for stability checking
                 return JSON.stringify({
-                    hasContent: hasContent,
                     paragraphCount: paragraphCount,
                     totalTextLength: totalTextLength
                 });
@@ -492,28 +503,51 @@ class MainActivity : FlutterActivity() {
             try {
                 val jsonStr = decodeJavascriptString(result) ?: "{}"
                 val json = org.json.JSONObject(jsonStr)
-                val hasContent = json.optBoolean("hasContent", false)
                 val paragraphCount = json.optInt("paragraphCount", 0)
                 val totalTextLength = json.optInt("totalTextLength", 0)
 
-                android.util.Log.d("CookieBridge", "  Content check attempt ${attemptCount + 1}/$maxAttempts: $paragraphCount paragraphs, $totalTextLength chars")
+                // Check if we have minimum viable content
+                val hasMinimumContent = paragraphCount >= 5 && totalTextLength >= 800
 
-                if (hasContent) {
-                    // Content is ready!
-                    callback(true)
-                } else if (attemptCount >= maxAttempts - 1) {
-                    // Timeout - proceed anyway
-                    android.util.Log.w("CookieBridge", "  Content not detected after $maxAttempts attempts, proceeding anyway")
-                    callback(false)
-                } else {
-                    // Try again after delay
-                    handler.postDelayed({
-                        waitForArticleContent(webView, handler, attemptCount + 1, maxWaitMs, callback)
-                    }, pollIntervalMs)
+                // Check if content has stopped changing (stability detection)
+                val contentStable = totalTextLength == previousLength && totalTextLength > 0
+                val newStabilityCount = if (contentStable) stabilityCount + 1 else 0
+
+                val waitedMinTime = attemptCount >= minAttempts
+                val reachedAbsoluteMax = attemptCount >= absoluteMaxAttempts
+
+                android.util.Log.d("CookieBridge",
+                    "  Check ${attemptCount + 1}: $paragraphCount paras, $totalTextLength chars " +
+                    "(stable: ${newStabilityCount}/$stabilityRequired, min: $hasMinimumContent)")
+
+                when {
+                    // Content is stable and we have minimum content
+                    newStabilityCount >= stabilityRequired && hasMinimumContent && waitedMinTime -> {
+                        android.util.Log.d("CookieBridge", "  ✓ Content stable and complete, extracting")
+                        callback(true)
+                    }
+                    // Reached absolute maximum timeout
+                    reachedAbsoluteMax -> {
+                        android.util.Log.w("CookieBridge", "  ⚠ Absolute max timeout (${absoluteMaxAttempts * pollIntervalMs}ms), extracting anyway")
+                        callback(false)
+                    }
+                    // Content has stopped growing and we've waited minimum time
+                    newStabilityCount >= stabilityRequired && waitedMinTime -> {
+                        android.util.Log.d("CookieBridge", "  ✓ Content stable after minimum wait, extracting")
+                        callback(true)
+                    }
+                    // Keep waiting
+                    else -> {
+                        handler.postDelayed({
+                            waitForArticleContentWithStability(
+                                webView, handler, attemptCount + 1, maxWaitMs,
+                                totalTextLength, newStabilityCount, callback
+                            )
+                        }, pollIntervalMs)
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("CookieBridge", "  Error checking content: ${e.message}")
-                // On error, just proceed
                 callback(false)
             }
         }
