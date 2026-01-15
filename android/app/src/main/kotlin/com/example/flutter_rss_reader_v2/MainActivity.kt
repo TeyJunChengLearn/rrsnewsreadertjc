@@ -108,8 +108,12 @@ class MainActivity : FlutterActivity() {
                             android.util.Log.d("CookieBridge", "  No cookies to apply (cookieHeader is empty)")
                         }
 
+                        // Apply cookies and ensure they're persisted
                         applyCookieHeader(url, cookieHeader, cookieManager)
                         cookieManager.flush()
+
+                        // Give cookies time to persist (critical for authentication)
+                        Thread.sleep(300)
 
                         // Verify cookies were set
                         val verifyString = cookieManager.getCookie(url)
@@ -135,12 +139,12 @@ class MainActivity : FlutterActivity() {
                             override fun onPageFinished(view: WebView, finishedUrl: String) {
                                 if (completed) return
 
-                                // Use automatic content detection instead of fixed delay
+                                // Use automatic content detection with respect to postLoadDelay
                                 // Execute paywall cleanup immediately, then wait for content
                                 val paywallRemovalScript = """
                                     (function() {
                                         // Remove common paywall UI elements
-                                        document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], .overlay, .modal-backdrop').forEach(el => el.remove());
+                                        document.querySelectorAll('[class*="paywall"], [id*="paywall"], [class*="premium"], [class*="subscribe-modal"], [class*="subscribe-prompt"], [class*="subscription"], .overlay, .modal-backdrop, .tp-modal, .tp-backdrop').forEach(el => el.remove());
 
                                         // Remove blur effects
                                         document.querySelectorAll('*').forEach(el => {
@@ -152,30 +156,39 @@ class MainActivity : FlutterActivity() {
                                         });
 
                                         // Unhide elements that might contain subscriber content
-                                        document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"]').forEach(el => {
+                                        document.querySelectorAll('.subscriber-content, .premium-content, .locked-content, [data-subscriber="true"], .paywalled-content').forEach(el => {
                                             el.style.display = 'block';
                                             el.style.visibility = 'visible';
                                             el.style.opacity = '1';
                                             el.style.height = 'auto';
+                                            el.style.maxHeight = 'none';
                                         });
 
                                         // Re-enable scrolling (some paywalls disable it)
                                         document.body.style.overflow = 'auto';
                                         document.documentElement.style.overflow = 'auto';
 
+                                        // Remove iframe overlays
+                                        document.querySelectorAll('iframe').forEach(iframe => {
+                                            const src = iframe.src || '';
+                                            if (src.includes('paywall') || src.includes('subscribe') || src.includes('piano.io')) {
+                                                iframe.remove();
+                                            }
+                                        });
+
                                         return 'cleanup-done';
                                     })();
                                 """.trimIndent()
 
-                                android.util.Log.d("CookieBridge", "  ⏱ Page finished loading, waiting for article content...")
+                                android.util.Log.d("CookieBridge", "  ⏱ Page finished loading, waiting for article content (max ${postLoadDelayMs}ms)...")
 
                                 // First execute cleanup, then wait for content to load
                                 view.evaluateJavascript(paywallRemovalScript) { _ ->
                                     if (completed) return@evaluateJavascript
 
                                     // Wait for article content to actually appear in the DOM
-                                    // This automatically detects when content is ready (no fixed delay)
-                                    waitForArticleContent(view, handler, 0) { contentReady ->
+                                    // Use postLoadDelay as the maximum wait time
+                                    waitForArticleContent(view, handler, 0, postLoadDelayMs) { contentReady ->
                                         if (completed) return@waitForArticleContent
 
                                         if (contentReady) {
@@ -419,15 +432,32 @@ class MainActivity : FlutterActivity() {
     /**
      * Waits for article content to appear in the DOM by polling for paragraphs with substantial text.
      * This prevents capturing HTML before JavaScript-loaded content is rendered.
+     * Uses content stability detection - waits until content stops changing.
+     * @param maxWaitMs Minimum time to wait for content (from postLoadDelay)
      */
     private fun waitForArticleContent(
         webView: WebView,
         handler: Handler,
         attemptCount: Int,
+        maxWaitMs: Int,
         callback: (Boolean) -> Unit
     ) {
-        val maxAttempts = 10  // Poll up to 10 times
+        waitForArticleContentWithStability(webView, handler, attemptCount, maxWaitMs, -1, 0, callback)
+    }
+
+    private fun waitForArticleContentWithStability(
+        webView: WebView,
+        handler: Handler,
+        attemptCount: Int,
+        maxWaitMs: Int,
+        previousLength: Int,
+        stabilityCount: Int,
+        callback: (Boolean) -> Unit
+    ) {
         val pollIntervalMs = 500L  // Check every 500ms
+        val minAttempts = (maxWaitMs / pollIntervalMs).toInt().coerceAtLeast(6)  // Minimum attempts based on delay
+        val absoluteMaxAttempts = 40  // Absolute maximum: 20 seconds total
+        val stabilityRequired = 4  // Content must be stable for 2 seconds (4 × 500ms)
 
         // JavaScript to check if article content has loaded
         val contentCheckScript = """
@@ -461,11 +491,8 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                // Consider content loaded if we have at least 3 paragraphs with 500+ total chars
-                const hasContent = paragraphCount >= 3 && totalTextLength >= 500;
-
+                // Return content metrics for stability checking
                 return JSON.stringify({
-                    hasContent: hasContent,
                     paragraphCount: paragraphCount,
                     totalTextLength: totalTextLength
                 });
@@ -476,28 +503,51 @@ class MainActivity : FlutterActivity() {
             try {
                 val jsonStr = decodeJavascriptString(result) ?: "{}"
                 val json = org.json.JSONObject(jsonStr)
-                val hasContent = json.optBoolean("hasContent", false)
                 val paragraphCount = json.optInt("paragraphCount", 0)
                 val totalTextLength = json.optInt("totalTextLength", 0)
 
-                android.util.Log.d("CookieBridge", "  Content check attempt ${attemptCount + 1}/$maxAttempts: $paragraphCount paragraphs, $totalTextLength chars")
+                // Check if we have minimum viable content
+                val hasMinimumContent = paragraphCount >= 5 && totalTextLength >= 800
 
-                if (hasContent) {
-                    // Content is ready!
-                    callback(true)
-                } else if (attemptCount >= maxAttempts - 1) {
-                    // Timeout - proceed anyway
-                    android.util.Log.w("CookieBridge", "  Content not detected after $maxAttempts attempts, proceeding anyway")
-                    callback(false)
-                } else {
-                    // Try again after delay
-                    handler.postDelayed({
-                        waitForArticleContent(webView, handler, attemptCount + 1, callback)
-                    }, pollIntervalMs)
+                // Check if content has stopped changing (stability detection)
+                val contentStable = totalTextLength == previousLength && totalTextLength > 0
+                val newStabilityCount = if (contentStable) stabilityCount + 1 else 0
+
+                val waitedMinTime = attemptCount >= minAttempts
+                val reachedAbsoluteMax = attemptCount >= absoluteMaxAttempts
+
+                android.util.Log.d("CookieBridge",
+                    "  Check ${attemptCount + 1}: $paragraphCount paras, $totalTextLength chars " +
+                    "(stable: ${newStabilityCount}/$stabilityRequired, min: $hasMinimumContent)")
+
+                when {
+                    // Content is stable and we have minimum content
+                    newStabilityCount >= stabilityRequired && hasMinimumContent && waitedMinTime -> {
+                        android.util.Log.d("CookieBridge", "  ✓ Content stable and complete, extracting")
+                        callback(true)
+                    }
+                    // Reached absolute maximum timeout
+                    reachedAbsoluteMax -> {
+                        android.util.Log.w("CookieBridge", "  ⚠ Absolute max timeout (${absoluteMaxAttempts * pollIntervalMs}ms), extracting anyway")
+                        callback(false)
+                    }
+                    // Content has stopped growing and we've waited minimum time
+                    newStabilityCount >= stabilityRequired && waitedMinTime -> {
+                        android.util.Log.d("CookieBridge", "  ✓ Content stable after minimum wait, extracting")
+                        callback(true)
+                    }
+                    // Keep waiting
+                    else -> {
+                        handler.postDelayed({
+                            waitForArticleContentWithStability(
+                                webView, handler, attemptCount + 1, maxWaitMs,
+                                totalTextLength, newStabilityCount, callback
+                            )
+                        }, pollIntervalMs)
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("CookieBridge", "  Error checking content: ${e.message}")
-                // On error, just proceed
                 callback(false)
             }
         }

@@ -150,15 +150,26 @@ bool _looksLikeTeaser(String? text) {
 
 /// Detects if a URL is from a known paywalled domain or Javascript-heavy site
 /// that requires WebView extraction with delays.
-/// Returns true for sites like Malaysiakini, NYT, WSJ, Harian Metro, etc.
+/// Focuses on Malaysian news sites. Other international sites use dynamic detection.
 bool _isPaywalledDomain(String url) {
   try {
     final uri = Uri.parse(url);
     final host = uri.host.toLowerCase();
 
-    // List of known paywalled domains and Javascript-heavy sites
-    const paywalledDomains = [
+    // Malaysian paywalled/Javascript-heavy sites (need WebView)
+    const malaysianPaywalledSites = [
       'malaysiakini.com',
+      'mkini.bz',                // Malaysiakini short domain
+      'hmetro.com.my',           // Harian Metro
+      'harakahdaily.net',        // Harakah Daily
+      'sinchew.com.my',          // Sin Chew Daily
+      'orientaldaily.com.my',    // Oriental Daily
+      'thestar.com.my',          // The Star
+      'freemalaysiatoday.com',   // FMT
+    ];
+
+    // Common international paywalled sites (for dynamic detection)
+    const internationalPaywalledSites = [
       'nytimes.com',
       'wsj.com',
       'bloomberg.com',
@@ -168,15 +179,17 @@ bool _isPaywalledDomain(String url) {
       'medium.com',
       'wired.com',
       'theatlantic.com',
-      'hmetro.com.my',           // Harian Metro - Javascript-heavy
-      'harakahdaily.net',        // Javascript-heavy Malaysian news
-      'sinchew.com.my',          // Sin Chew Daily - Javascript-heavy
-      'orientaldaily.com.my',    // Oriental Daily - Javascript-heavy
-      'thestar.com.my',          // The Star - Some articles paywalled
-      'freemalaysiatoday.com',   // Javascript-heavy
     ];
 
-    for (final domain in paywalledDomains) {
+    // Check Malaysian sites
+    for (final domain in malaysianPaywalledSites) {
+      if (host.contains(domain)) {
+        return true;
+      }
+    }
+
+    // Check international sites
+    for (final domain in internationalPaywalledSites) {
       if (host.contains(domain)) {
         return true;
       }
@@ -196,47 +209,29 @@ int _getOptimalDelay(String url) {
     final host = uri.host.toLowerCase();
 
     // Malaysian news sites with heavy JavaScript/authentication
-    // These need longer delays to fully load subscriber content
+    // These delays are MINIMUM wait times - system will continue monitoring
+    // until content stabilizes (no changes for 2 seconds) or max timeout
     const heavyJsSites = {
-      'malaysiakini.com': 6000,      // Malaysiakini needs 6 seconds for auth
-      'mkini.bz': 6000,               // Malaysiakini short domain
-      'hmetro.com.my': 5000,          // Harian Metro
-      'harakahdaily.net': 5000,       // Harakah Daily
-      'sinchew.com.my': 5000,         // Sin Chew Daily
-      'orientaldaily.com.my': 5000,   // Oriental Daily
-      'freemalaysiatoday.com': 4000,  // FMT
+      'malaysiakini.com': 8000,      // Minimum 8s for auth, then wait for stability
+      'mkini.bz': 8000,               // Malaysiakini short domain
+      'hmetro.com.my': 7000,          // Minimum wait for Harian Metro
+      'harakahdaily.net': 7000,       // Minimum wait for Harakah Daily
+      'sinchew.com.my': 7000,         // Minimum wait for Sin Chew Daily
+      'orientaldaily.com.my': 7000,   // Minimum wait for Oriental Daily
+      'freemalaysiatoday.com': 6000,  // Minimum wait for FMT
     };
 
-    // International paywall sites
-    // These also need extra time for authentication checks
-    const internationalPaywalls = {
-      'nytimes.com': 5000,
-      'wsj.com': 5000,
-      'bloomberg.com': 4000,
-      'ft.com': 5000,
-      'economist.com': 4000,
-      'washingtonpost.com': 4000,
-      'medium.com': 3000,
-      'wired.com': 3000,
-      'theatlantic.com': 3000,
-    };
-
-    // Check Malaysian sites first (higher priority)
+    // Check Malaysian sites first (these need minimum delays)
     for (final entry in heavyJsSites.entries) {
       if (host.contains(entry.key)) {
         return entry.value;
       }
     }
 
-    // Check international sites
-    for (final entry in internationalPaywalls.entries) {
-      if (host.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-
-    // Default delay for other paywalled sites
-    return 3000;
+    // For all other sites (including international paywalls):
+    // Use dynamic content detection - wait until content stops changing
+    // This is more reliable than fixed delays and works for any site
+    return 3000; // Minimum 3 seconds, then wait for content stability
   } catch (_) {
     return 3000; // Default 3 seconds
   }
