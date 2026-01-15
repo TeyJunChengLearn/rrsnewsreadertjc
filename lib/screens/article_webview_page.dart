@@ -692,6 +692,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   String? _cachedTtsLanguageCode; // Cached TTS language code to avoid repeated detection
   SettingsProvider? _settings;
   VoidCallback? _settingsListener;
+  RssProvider? _rssProvider;
+  VoidCallback? _rssListener;
   static const int _readingNotificationId = 22;
   String? _webHighlightText;
 
@@ -900,6 +902,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     _attachSettingsListener();
+    _attachRssListener();
     unawaited(_initNotifications());
     // Preload Readability text in background so TTS/translate work in both modes
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -982,6 +985,52 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       // Add listener for future changes
       _settings?.addListener(_settingsListener!);
     });
+  }
+
+  void _attachRssListener() {
+    // Listen for enrichment updates to reload content when enrichment completes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _rssProvider = context.read<RssProvider>();
+      _rssListener = () {
+        if (!mounted || _disposed) return;
+        unawaited(_handleEnrichmentUpdate());
+      };
+      _rssProvider?.addListener(_rssListener!);
+    });
+  }
+
+  Future<void> _handleEnrichmentUpdate() async {
+    // Check if enrichment has completed for the current article
+    if (!mounted || _disposed || widget.articleId == null) return;
+
+    // Only reload if we're currently in webview mode (not reader mode)
+    // and we don't have content loaded yet
+    if (_readerOn || _lines.isNotEmpty) return;
+
+    // Check if the current article now has enriched content
+    try {
+      final dao = context.read<ArticleDao>();
+      final article = await dao.findById(widget.articleId!);
+      if (article == null) return;
+
+      final hasContent = (article.mainText ?? '').trim().isNotEmpty;
+      if (!hasContent) return;
+
+      // Content is now available! Reload in reader mode
+      final settings = context.read<SettingsProvider>();
+      if (!settings.displaySummary) return; // User has reader mode disabled
+
+      if (mounted && !_disposed) {
+        setState(() {
+          _readerOn = true;
+        });
+        await _loadReaderContent();
+      }
+    } catch (e) {
+      // Silently ignore errors
+      debugPrint('Error checking enrichment update: $e');
+    }
   }
 
   Future<void> _applySpeechRateFromSettings({bool restartIfPlaying = true}) async {
@@ -3039,6 +3088,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _cancelPeriodicHighlightSync();
     if (_settingsListener != null && _settings != null) {
       _settings!.removeListener(_settingsListener!);
+    }
+    if (_rssListener != null && _rssProvider != null) {
+      _rssProvider!.removeListener(_rssListener!);
     }
 
     // Disable WakeLock when navigating away (just in case)
