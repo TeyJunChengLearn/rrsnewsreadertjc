@@ -506,9 +506,9 @@ class MainActivity : FlutterActivity() {
                 val paragraphCount = json.optInt("paragraphCount", 0)
                 val totalTextLength = json.optInt("totalTextLength", 0)
 
-                // Increased minimum content threshold for better full content capture
-                // Was: 5 paragraphs, 800 chars → Now: 8 paragraphs, 1500 chars
-                val hasMinimumContent = paragraphCount >= 8 && totalTextLength >= 1500
+                // Minimum content threshold for extraction readiness.
+                // Avoid blocking shorter articles while still waiting for meaningful content.
+                val hasMinimumContent = paragraphCount >= 4 && totalTextLength >= 600
 
                 // Check if content has stopped changing (stability detection)
                 val contentStable = totalTextLength == previousLength && totalTextLength > 0
@@ -562,10 +562,15 @@ class MainActivity : FlutterActivity() {
         if (cookieHeader.isNullOrBlank()) return
 
         val uri = Uri.parse(url)
-        val baseUrl = "${uri.scheme}://${uri.host}"
+        val scheme = if (uri.scheme.isNullOrBlank()) "https" else uri.scheme
+        val host = uri.host ?: return
+        val baseHost = host.removePrefix("www.")
+        val baseUrl = "$scheme://$baseHost"
+        val wwwUrl = "$scheme://www.$baseHost"
 
         cookieHeader.split(';').map { it.trim() }.filter { it.isNotEmpty() }.forEach { cookie ->
             cookieManager.setCookie(baseUrl, cookie)
+            cookieManager.setCookie(wwwUrl, cookie)
             cookieManager.setCookie(url, cookie)
         }
     }

@@ -824,35 +824,116 @@ class Readability4JExtended {
     if (ogImage != null && ogImage.trim().isNotEmpty) {
       return _resolveImageUrl(ogImage.trim(), pageUri);
     }
+    final ogSecureImage = doc
+        .querySelector('meta[property="og:image:secure_url"]')
+        ?.attributes['content'];
+    if (ogSecureImage != null && ogSecureImage.trim().isNotEmpty) {
+      return _resolveImageUrl(ogSecureImage.trim(), pageUri);
+    }
 
     final twitterImage =
         doc.querySelector('meta[name="twitter:image"]')?.attributes['content'];
     if (twitterImage != null && twitterImage.trim().isNotEmpty) {
       return _resolveImageUrl(twitterImage.trim(), pageUri);
     }
+    final twitterImageSrc = doc
+        .querySelector('meta[name="twitter:image:src"]')
+        ?.attributes['content'];
+    if (twitterImageSrc != null && twitterImageSrc.trim().isNotEmpty) {
+      return _resolveImageUrl(twitterImageSrc.trim(), pageUri);
+    }
 
     // Find largest image
-    final images = doc.querySelectorAll('img[src]');
+    final images = doc.querySelectorAll('img');
     String? bestImage;
     var bestSize = 0;
 
     for (final img in images) {
-      final src = img.attributes['src'];
-      if (src == null || src.contains('logo') || src.contains('icon')) {
+      final candidate = _resolveImageCandidate(img, pageUri);
+      if (candidate == null ||
+          candidate.contains('logo') ||
+          candidate.contains('icon')) {
         continue;
       }
 
-      final width = int.tryParse(img.attributes['width'] ?? '') ?? 0;
-      final height = int.tryParse(img.attributes['height'] ?? '') ?? 0;
+      final width = int.tryParse(img.attributes['width'] ?? '') ??
+          int.tryParse(img.attributes['data-width'] ?? '') ??
+          0;
+      final height = int.tryParse(img.attributes['height'] ?? '') ??
+          int.tryParse(img.attributes['data-height'] ?? '') ??
+          0;
       final size = width * height;
 
       if (size > bestSize) {
         bestSize = size;
-        bestImage = src;
+        bestImage = candidate;
       }
     }
 
     return bestImage != null ? _resolveImageUrl(bestImage, pageUri) : null;
+  }
+
+  String? _resolveImageCandidate(dom.Element img, Uri pageUri) {
+    final dataSrc = img.attributes['data-src'];
+    if (dataSrc != null && dataSrc.trim().isNotEmpty) {
+      return _resolveImageUrl(dataSrc.trim(), pageUri);
+    }
+
+    final dataOriginal = img.attributes['data-original'];
+    if (dataOriginal != null && dataOriginal.trim().isNotEmpty) {
+      return _resolveImageUrl(dataOriginal.trim(), pageUri);
+    }
+
+    final dataLazySrc = img.attributes['data-lazy-src'];
+    if (dataLazySrc != null && dataLazySrc.trim().isNotEmpty) {
+      return _resolveImageUrl(dataLazySrc.trim(), pageUri);
+    }
+
+    final dataSrcSet = img.attributes['data-srcset'];
+    final srcset = img.attributes['srcset'];
+    final srcsetCandidate = _pickBestFromSrcset(dataSrcSet ?? srcset);
+    if (srcsetCandidate != null) {
+      return _resolveImageUrl(srcsetCandidate, pageUri);
+    }
+
+    final src = img.attributes['src'];
+    if (src != null && src.trim().isNotEmpty) {
+      return _resolveImageUrl(src.trim(), pageUri);
+    }
+
+    return null;
+  }
+
+  String? _pickBestFromSrcset(String? srcset) {
+    if (srcset == null || srcset.trim().isEmpty) return null;
+    final candidates = srcset.split(',').map((entry) => entry.trim()).toList();
+    if (candidates.isEmpty) return null;
+
+    String? bestUrl;
+    double bestScore = -1;
+
+    for (final candidate in candidates) {
+      if (candidate.isEmpty) continue;
+      final parts = candidate.split(RegExp(r'\s+'));
+      final url = parts.first;
+      double score = 0;
+
+      if (parts.length > 1) {
+        final descriptor = parts[1].trim();
+        if (descriptor.endsWith('w')) {
+          score = double.tryParse(descriptor.replaceAll('w', '')) ?? 0;
+        } else if (descriptor.endsWith('x')) {
+          score = (double.tryParse(descriptor.replaceAll('x', '')) ?? 0) * 1000;
+        }
+      }
+
+      if (score >= bestScore) {
+        bestScore = score;
+        bestUrl = url;
+      }
+    }
+
+    return bestUrl ?? candidates.first.split(' ').first;
   }
 
   /// Resolve image URL
