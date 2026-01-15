@@ -3143,6 +3143,28 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
               },
               tooltip: 'Share article',
             ),
+            if (widget.articleId != null)
+              IconButton(
+                icon: const Icon(Icons.refresh_outlined),
+                onPressed: () async {
+                  final rss = context.read<RssProvider>();
+                  final article = widget.allArticles.cast<FeedItem?>().firstWhere(
+                    (a) => a?.id == widget.articleId,
+                    orElse: () => null,
+                  );
+
+                  if (article != null) {
+                    // Reset enrichment and mark as unread
+                    await rss.resetEnrichment(article);
+
+                    // Navigate back to news page
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  }
+                },
+                tooltip: 'Re-enrich article',
+              ),
             IconButton(
               icon: Icon(_readerOn ? Icons.web : Icons.chrome_reader_mode),
               onPressed: _toggleReader,

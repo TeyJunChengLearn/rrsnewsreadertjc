@@ -118,6 +118,10 @@ class FeedRepository {
     await articleDao.updateBookmark(id, isBookmarked);
   }
 
+  Future<void> resetEnrichment(String id) async {
+    await articleDao.resetEnrichment(id);
+  }
+
   Future<void> hideOlderThan(DateTime cutoff) async {
     await articleDao.hideOlderThan(cutoff);
   }
