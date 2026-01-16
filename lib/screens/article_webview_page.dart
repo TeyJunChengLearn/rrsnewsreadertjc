@@ -924,6 +924,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         // Open in reader mode (summary view)
         setState(() => _readerOn = true);
         await _loadReaderContent();
+      } else {
+        // Open in webview mode - load the full website
+        await _controller.loadRequest(Uri.parse(widget.url));
       }
 
       await _ensureLinesLoaded();
@@ -1081,9 +1084,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           },
         ),
       );
-
-    // Default: show full website
-    _controller.loadRequest(Uri.parse(widget.url));
+    // Note: Don't load URL here - defer to addPostFrameCallback to avoid race condition
+    // with reader mode initialization
   }
 
   Future<void> _initNotifications() async {
@@ -1151,14 +1153,18 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     await _ensureLinesLoaded();
     if (_lines.isEmpty) {
       if (mounted) {
-        _readerOn = false;
-        _isLoading = false;
+        setState(() {
+          _readerOn = false;
+          _isLoading = false;
+        });
       }
       await _controller.loadRequest(Uri.parse(widget.url));
       return;
     }
 
-    final html = _buildReaderHtml(_lines, _heroImageUrl);
+    if (!mounted) return;
+    final isDark = context.read<SettingsProvider>().darkTheme;
+    final html = _buildReaderHtml(_lines, _heroImageUrl, isDark: isDark);
     await _controller.loadRequest(
       Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
     );
@@ -1481,7 +1487,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       setState(() => _isLoading = true);
     }
 
-    final html = _buildReaderHtml(_lines, _heroImageUrl);
+    final isDark = context.read<SettingsProvider>().darkTheme;
+    final html = _buildReaderHtml(_lines, _heroImageUrl, isDark: isDark);
 
     await _controller.loadRequest(
       Uri.dataFromString(html, mimeType: 'text/html', encoding: utf8),
@@ -1501,16 +1508,21 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
-  String _buildReaderHtml(List<String> lines, String? heroUrl) {
+  String _buildReaderHtml(List<String> lines, String? heroUrl, {bool isDark = false}) {
+    // Colors for light and dark mode
+    final bgColor = isDark ? '#121212' : '#fff';
+    final textColor = isDark ? '#e0e0e0' : '#000';
+    final highlightColor = isDark ? 'rgba(255,235,59,0.3)' : 'rgba(255,235,59,0.4)';
+
     final buffer = StringBuffer();
     buffer.writeln('<html><head>'
         '<meta name="viewport" content="width=device-width, initial-scale=1.0">');
     buffer.writeln('<style>'
-        'body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,system-ui,Roboto,"Segoe UI",sans-serif;}'
+        'body{margin:0;background:$bgColor;color:$textColor;font-family:-apple-system,BlinkMacSystemFont,system-ui,Roboto,"Segoe UI",sans-serif;}'
         '.wrap{max-width:760px;margin:0 auto;padding:16px;}'
         'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}'
-        'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;}'
-        'p.hl{background-color:rgba(255,235,59,0.4) !important;}'
+        'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;color:$textColor;}'
+        'p.hl{background-color:$highlightColor !important;}'
         // treat first line (index 0) as header
         'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:1.2rem;}'
         '</style>');
@@ -2192,14 +2204,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     final text = (result?.mainText ?? '').trim();
     final pagePaywalled = result?.isPaywalled ?? false;
     if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Reader text is still loading. Please wait while it finishes in the background.',
-          ),
-          duration: const Duration(seconds: 5),
-        ),
-      );
+      // Content not extracted yet - silently continue with webview mode
+      // The calling code (_loadReaderContent) will handle falling back to website
       setState(() {
         _paywallLikely = false;
         _lines.clear();

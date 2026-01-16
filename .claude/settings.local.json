@@ -16,7 +16,8 @@
       "Bash(identify:*)",
       "Bash(find:*)",
       "Bash(flutter pub run:*)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
