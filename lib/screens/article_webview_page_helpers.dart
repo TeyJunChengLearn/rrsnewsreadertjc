@@ -84,12 +84,6 @@ String _ttsLocaleForCode(String code) {
   }
 }
 
-/// Extract short language code from BCP-47 code (e.g., "zh-CN" -> "zh")
-String _extractShortLangCode(String bcpCode) {
-  if (!bcpCode.contains('-')) return bcpCode;
-  return bcpCode.split('-').first;
-}
-
 // ---------- Chinese number helper (for TTS) ----------
 
 String _toChineseNumber(String rawDigits) {

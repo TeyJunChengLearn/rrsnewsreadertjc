@@ -5,8 +5,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
-import '../models/feed_source.dart';
-
 class DatabaseService {
   static final DatabaseService _instance = DatabaseService._internal();
   DatabaseService._internal();

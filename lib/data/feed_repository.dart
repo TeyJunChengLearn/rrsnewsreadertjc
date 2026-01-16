@@ -14,12 +14,12 @@ class FeedRepository {
   final RssService rssService;
   final ArticleDao articleDao;
   final FeedSourceDao feedSourceDao;
-  final ArticleContentService articleContentService;
+  final ArticleContentService? articleContentService;
   FeedRepository({
     required this.rssService,
     required this.articleDao,
     required this.feedSourceDao,
-    required this.articleContentService,
+    this.articleContentService,
   });
 
   // ---------------------------------------------------------------------------
@@ -131,7 +131,10 @@ class FeedRepository {
   Future<Map<String, ArticleReadabilityResult>> populateArticleContent(
     List<FeedItem> items,
   ) async {
-    return await articleContentService.backfillMissingContent(items);
+    if (articleContentService == null) {
+      return {};
+    }
+    return await articleContentService!.backfillMissingContent(items);
   }
   // ---------------------------------------------------------------------------
   // CLEANUP

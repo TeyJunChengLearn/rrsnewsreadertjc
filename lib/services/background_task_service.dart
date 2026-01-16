@@ -10,20 +10,17 @@ import '../data/http_feed_fetcher.dart';
 import '../data/rss_atom_parser.dart';
 import 'rss_service.dart';
 import '../data/feed_repository.dart';
-import 'article_content_service.dart';
-import 'readability_service.dart';
 
 const String fetchArticlesTaskName = 'fetchArticles';
 
 /// Background task callback - runs when WorkManager triggers the task
-/// Only fetches RSS feeds, does NOT enrich articles (enrichment happens on-screen only)
+/// Only fetches RSS feeds and stores articles for the news page
 @pragma('vm:entry-point')
 void backgroundTaskCallback() {
   Workmanager().executeTask((task, inputData) async {
     debugPrint('📱 Background task started: $task');
 
     try {
-      // Initialize minimal services for RSS fetching only
       final dbService = DatabaseService();
       final articleDao = ArticleDao(dbService);
       final feedSourceDao = FeedSourceDao(dbService);
@@ -36,26 +33,10 @@ void backgroundTaskCallback() {
         parser: RssAtomParser(),
       );
 
-      // Create a minimal ArticleContentService just for repository
-      // (not used in background, but needed for repository constructor)
-      final readability = Readability4JExtended(
-        config: ReadabilityConfig(
-          requestDelay: const Duration(milliseconds: 500),
-          attemptRssFallback: true,
-        ),
-        cookieHeaderBuilder: cookieBridge.buildHeader,
-      );
-
-      final articleContentService = ArticleContentService(
-        readability: readability,
-        articleDao: articleDao,
-      );
-
       final repository = FeedRepository(
         rssService: rssService,
         articleDao: articleDao,
         feedSourceDao: feedSourceDao,
-        articleContentService: articleContentService,
       );
 
       // Fetch new articles from RSS feeds
@@ -68,7 +49,6 @@ void backgroundTaskCallback() {
 
       final allArticles = await articleDao.getAllArticles();
       debugPrint('✅ Background fetch completed: ${allArticles.length} total articles in database');
-      debugPrint('ℹ️ Articles will be enriched on-screen when viewed');
 
       return Future.value(true);
     } catch (e, stack) {

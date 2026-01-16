@@ -1,5 +1,7 @@
 part of 'article_webview_page.dart';
 
+// ignore_for_file: invalid_use_of_protected_member
+
 extension _ArticleWebviewPageTranslation on _ArticleWebviewPageState {
   TranslateLanguage? _translateLanguageFromCode(String code) {
     switch (code) {
@@ -210,13 +212,6 @@ extension _ArticleWebviewPageTranslation on _ArticleWebviewPageState {
       'translated': List<String>.from(translated),
     };
     debugPrint('💾 Cached translation for article: $articleId');
-  }
-
-  /// Clear cached translation for an article
-  void _clearCachedTranslation(String articleId) {
-    if (articleId.isEmpty) return;
-    _ttsState.translationCache.remove(articleId);
-    debugPrint('🗑️ Cleared cached translation for article: $articleId');
   }
 
   Future<void> _toggleTranslateToSetting() async {

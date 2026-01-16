@@ -11,7 +11,6 @@ import 'package:flutter_rss_reader/services/article_dao.dart';
 import 'package:flutter_rss_reader/services/database_service.dart';
 import 'package:flutter_rss_reader/services/cookie_bridge.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
@@ -97,15 +96,6 @@ class LocalBackupService {
       debugPrint('LocalBackupService: ✗ Export error: $e');
       debugPrint('LocalBackupService: Stack trace: $stackTrace');
       return null;
-    }
-  }
-
-  Future<int> _getAndroidVersion() async {
-    try {
-      // This is a simplified version - in production you'd want to properly check Android API level
-      return 33; // Assume modern Android for now
-    } catch (e) {
-      return 33;
     }
   }
 
@@ -411,9 +401,7 @@ class LocalBackupService {
               builder.attribute('text', feed.title);
               builder.attribute('title', feed.title);
               builder.attribute('xmlUrl', feed.url);
-              if (feed.delayTime != null) {
-                builder.attribute('delayTime', feed.delayTime.toString());
-              }
+              builder.attribute('delayTime', feed.delayTime.toString());
               builder.attribute('requiresLogin', feed.requiresLogin.toString());
 
               // Export articles for this feed

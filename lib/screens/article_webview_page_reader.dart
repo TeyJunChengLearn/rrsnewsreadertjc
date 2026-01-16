@@ -1,5 +1,7 @@
 part of 'article_webview_page.dart';
 
+// ignore_for_file: invalid_use_of_protected_member
+
 extension _ArticleWebviewPageReader on _ArticleWebviewPageState {
   Future<void> _loadReaderContent() async {
     final shouldShowLoading = _lines.isEmpty;

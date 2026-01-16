@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../services/cookie_bridge.dart';
-import '../services/readability_service.dart';
 
 class CookieDiagnosticPage extends StatefulWidget {
   const CookieDiagnosticPage({super.key});
@@ -20,7 +19,6 @@ class _CookieDiagnosticPageState extends State<CookieDiagnosticPage> {
 
   bool _isChecking = false;
   Map<String, String> _cookies = {};
-  String? _cookieHeader;
   bool _hasAuthCookies = false;
   String _diagnosticLog = '';
 
@@ -35,7 +33,6 @@ class _CookieDiagnosticPageState extends State<CookieDiagnosticPage> {
       _isChecking = true;
       _diagnosticLog = 'Starting diagnostics...\n';
       _cookies.clear();
-      _cookieHeader = null;
       _hasAuthCookies = false;
     });
 
@@ -50,7 +47,6 @@ class _CookieDiagnosticPageState extends State<CookieDiagnosticPage> {
 
     try {
       final cookieBridge = context.read<CookieBridge>();
-      final readability = context.read<Readability4JExtended>();
 
       _log('Testing URL: $url\n');
 
@@ -143,7 +139,6 @@ class _CookieDiagnosticPageState extends State<CookieDiagnosticPage> {
 
       setState(() {
         _cookies = cookies;
-        _cookieHeader = header;
         _hasAuthCookies = hasAuth;
         _isChecking = false;
       });

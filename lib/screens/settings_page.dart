@@ -8,7 +8,6 @@ import 'article_webview_page.dart';
 import 'cookie_diagnostic_page.dart';
 import 'feed_speed_settings_page.dart';
 import '../services/local_backup_service.dart';
-import '../models/backup_data.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -27,22 +26,6 @@ class SettingsPage extends StatelessWidget {
           ],
         ) ??
         15;
-
-    final perFeedLimit = _firstInt(
-          [
-            () => d.articleLimitPerFeed,
-            () => d.perFeedLimit,
-            () => d.maxItemsPerFeed,
-          ],
-        ) ??
-        1000;
-
-    final unreadCount = _firstInt([
-          () => d.currentUnreadCount,
-          () => d.unreadCount,
-          () => d.unread
-        ]) ??
-        0;
 
     final darkTheme = _firstBool(
             [() => d.darkTheme, () => d.isDarkTheme, () => d.themeDark]) ??
@@ -516,37 +499,6 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  Future<void> _pickPerFeedLimit(
-    BuildContext context,
-    dynamic d,
-    int current,
-  ) async {
-    const choices = [200, 500, 1000, 1500, 2000];
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          children: choices
-              .map(
-                (n) => ListTile(
-                  leading: const Icon(Icons.view_list),
-                  title: Text('$n items per feed'),
-                  trailing: current == n ? const Icon(Icons.check) : null,
-                  onTap: () => Navigator.pop(ctx, n),
-                ),
-              )
-              .toList(),
-        ),
-      ),
-    );
-    if (picked != null) {
-      _tryCall(d, () => d.setArticleLimitPerFeed(picked));
-      _tryCall(d, () => d.setPerFeedLimit(picked));
-      _tryCall(d, () => d.setMaxItemsPerFeed(picked));
-    }
-  }
-
   // ================== BACKUP & RESTORE HANDLERS =================
   Future<void> _handleExportBackup(BuildContext context) async {
     final service = LocalBackupService();
@@ -842,8 +794,7 @@ String _labelForCode(String code) {
 T? _first<T>(List<T Function()> getters) {
   for (final g in getters) {
     try {
-      final v = g();
-      if (v is T) return v as T;
+      return g();
     } catch (_) {
       // missing getter: ignore
     }

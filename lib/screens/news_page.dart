@@ -1170,7 +1170,7 @@ class _ArticleRow extends StatelessWidget {
                                 currentItem.isRead == 1 ? Colors.grey.shade600 : null),
                         onPressed: () {
                           final shareText =
-                              '${currentItem.title}\n${currentItem.link ?? ''}'.trim();
+                              '${currentItem.title}\n${currentItem.link}'.trim();
                           Share.share(shareText);
                         },
                       ),
@@ -1222,7 +1222,7 @@ class _ArticleRow extends StatelessWidget {
                                         onTap: () {
                                           Navigator.of(ctx).pop();
                                           final shareText =
-                                              '${currentItem.title}\n${currentItem.link ?? ''}'
+                                              '${currentItem.title}\n${currentItem.link}'
                                                   .trim();
                                           Share.share(shareText);
                                         },

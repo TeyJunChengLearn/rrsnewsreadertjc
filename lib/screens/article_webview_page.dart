@@ -66,8 +66,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _paywallLikely = false;
   bool _articleUnavailable = false;
   String _articleUnavailableMessage = '';
-  bool _readerHintVisible = false;
-  bool _readerHintDismissed = false;
   bool _articleLoadFailed = false; // Track if article failed to load (deleted/hidden)
   int _mainFrameLoadAttempts = 0;
   String? _lastRequestedUrl;
@@ -181,17 +179,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         }
       }
     }
-  }
-
-  Future<bool> _handleBackNavigation() async {
-    if (!mounted) return true;
-
-    // Save reading position before leaving
-    await _saveReadingPosition();
-
-    // Allow back navigation without stopping reading
-    // TTS will continue in background, controlled via notification
-    return true;
   }
 
   void _initTtsHandlers() {
@@ -457,7 +444,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       final List<Map<String, dynamic>> parsed =
           voices.whereType<Map>().map<Map<String, dynamic>>((m) {
         final map = <String, dynamic>{};
-        (m as Map).forEach((key, value) {
+        m.forEach((key, value) {
           map[key.toString()] = value;
         });
         return map;
@@ -508,7 +495,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           },
           onWebResourceError: (error) async {
             if (!mounted || _disposed) return;
-            if (!error.isForMainFrame) return;
+            if (error.isForMainFrame != true) return;
 
             if (_lastRequestedUrl != null && _mainFrameLoadAttempts < 2) {
               _mainFrameLoadAttempts++;
@@ -1024,7 +1011,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         _paywallLikely = false;
         _lines.clear();
         _currentLine = 0;
-        _readerHintVisible = false;
       });
       return;
     }
@@ -1088,7 +1074,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       if (isCurrentlyPlaying) {
         _ttsState.lines = _lines;
       }
-      _readerHintVisible = !_readerOn && !_readerHintDismissed;
     });
 
     // Show visual feedback if position was restored (but not if currently playing)
@@ -1188,30 +1173,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       ''');
     } catch (e) {
       // Silently fail if JavaScript execution fails
-      print('Failed to remove paywall overlays: $e');
+      debugPrint('Failed to remove paywall overlays: $e');
     }
   }
 
-  String? _normalizeJsString(dynamic raw) {
-    if (raw == null) return null;
-    if (raw is String) {
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is String) return decoded;
-      } catch (_) {
-        // If it's already a plain string (not JSON-wrapped), use as-is.
-      }
-      return raw;
-    }
-
-    try {
-      final decoded = jsonDecode(raw.toString());
-      if (decoded is String) return decoded;
-    } catch (_) {
-      // Fallback to simple string conversion
-    }
-    return raw.toString();
-  }
   Future<void> _speakCurrentLine({bool auto = false}) async {
     _cancelAutoAdvanceTimer();
     // Only load lines on first play, not during auto-advance (optimization)
@@ -1433,29 +1398,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
   }
 
-  void _startAutoAdvanceTimer() {
-    _cancelAutoAdvanceTimer();
-
-    // Show countdown snackbar
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Moving to next article in 5 seconds...'),
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Cancel',
-            onPressed: _cancelAutoAdvanceTimer,
-          ),
-        ),
-      );
-    }
-
-    _autoAdvanceTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted || _disposed) return;
-      _navigateToNextArticle();
-    });
-  }
-
   void _cancelAutoAdvanceTimer() {
     _autoAdvanceTimer?.cancel();
     _autoAdvanceTimer = null;
@@ -1526,45 +1468,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     return currentIndex >= 0 && currentIndex + 1 < widget.allArticles.length;
   }
 
-  FeedItem? _getNextArticle() {
-    if (!_hasNextArticle()) return null;
-
-    final currentIndex = widget.allArticles.indexWhere(
-      (article) => article.id == widget.articleId,
-    );
-
-    if (currentIndex >= 0 && currentIndex + 1 < widget.allArticles.length) {
-      return widget.allArticles[currentIndex + 1];
-    }
-
-    return null;
-  }
-
-  bool _hasPreviousArticle() {
-    if (widget.allArticles.isEmpty) return false;
-
-    final currentIndex = widget.allArticles.indexWhere(
-      (article) => article.id == widget.articleId,
-    );
-
-    // Check if there's a previous article
-    return currentIndex > 0;
-  }
-
-  FeedItem? _getPreviousArticle() {
-    if (!_hasPreviousArticle()) return null;
-
-    final currentIndex = widget.allArticles.indexWhere(
-      (article) => article.id == widget.articleId,
-    );
-
-    if (currentIndex > 0) {
-      return widget.allArticles[currentIndex - 1];
-    }
-
-    return null;
-  }
-
   void _markCurrentArticleRead() {
     if (widget.allArticles.isEmpty || widget.articleId == null) return;
 
@@ -1602,7 +1505,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           MaterialPageRoute(
             builder: (_) => ArticleWebviewPage(
               articleId: firstArticle.id,
-              url: firstArticle.link ?? '',
+              url: firstArticle.link,
               title: firstArticle.title,
               sourceTitle: firstArticle.sourceTitle,
               initialMainText: firstArticle.mainText,
@@ -1628,7 +1531,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         MaterialPageRoute(
           builder: (_) => ArticleWebviewPage(
             articleId: nextArticle.id,
-            url: nextArticle.link ?? '',
+            url: nextArticle.link,
             title: nextArticle.title,
             sourceTitle: nextArticle.sourceTitle,
             initialMainText: nextArticle.mainText,
@@ -1675,7 +1578,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         MaterialPageRoute(
           builder: (_) => ArticleWebviewPage(
             articleId: previousArticle.id,
-            url: previousArticle.link ?? '',
+            url: previousArticle.link,
             title: previousArticle.title,
             sourceTitle: previousArticle.sourceTitle,
             initialMainText: previousArticle.mainText,
@@ -1715,7 +1618,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           MaterialPageRoute(
             builder: (_) => ArticleWebviewPage(
               articleId: firstArticle.id,
-              url: firstArticle.link ?? '',
+              url: firstArticle.link,
               title: firstArticle.title,
               sourceTitle: firstArticle.sourceTitle,
               initialMainText: firstArticle.mainText,
@@ -1741,7 +1644,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         MaterialPageRoute(
           builder: (_) => ArticleWebviewPage(
             articleId: nextArticle.id,
-            url: nextArticle.link ?? '',
+            url: nextArticle.link,
             title: nextArticle.title,
             sourceTitle: nextArticle.sourceTitle,
             initialMainText: nextArticle.mainText,
@@ -1847,11 +1750,6 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   Future<void> _toggleReader() async {
     setState(() {
       _readerOn = !_readerOn;
-      if (_readerOn) {
-        _readerHintVisible = false;
-      } else if (_lines.isNotEmpty && !_readerHintDismissed) {
-        _readerHintVisible = true;
-      }
     });
 
     // Save reader mode state globally so it persists when returning to this article
@@ -1966,7 +1864,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       MaterialPageRoute(
         builder: (_) => ArticleWebviewPage(
           articleId: article.id,
-          url: article.link ?? '',
+          url: article.link,
           title: article.title,
           initialMainText: article.mainText,
           initialImageUrl: article.imageUrl,
@@ -2078,19 +1976,19 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       );
     }
 
-    return WillPopScope(
-      onWillPop: _handleBackNavigation,
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) {
+          _saveReadingPosition();
+        }
+      },
       child: Scaffold(
         appBar: AppBar(
           title: const SizedBox.shrink(),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () async {
-              final shouldPop = await _handleBackNavigation();
-              if (shouldPop && mounted) {
-                Navigator.of(context).maybePop();
-              }
-            },
+            onPressed: () => Navigator.of(context).maybePop(),
           ),
           actions: [
             IconButton(
@@ -2167,7 +2065,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
                   child: Material(
                     elevation: 6,
                     borderRadius: BorderRadius.circular(12),
-                    color: Colors.orange.shade50.withOpacity(0.95),
+                    color: Colors.orange.shade50.withValues(alpha: 0.95),
                     child: Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Row(

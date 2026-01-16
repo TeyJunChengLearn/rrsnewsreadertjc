@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
@@ -353,7 +354,7 @@ class Readability4JExtended {
 
       return htmlResult;
     } catch (e) {
-      print('Error extracting content from $url: $e');
+      debugPrint('Error extracting content from $url: $e');
       return null;
     }
   }
@@ -371,16 +372,16 @@ class Readability4JExtended {
       // Get cookies for authentication
       String? cookieHeader;
       if (_cookieHeaderBuilder != null) {
-        cookieHeader = await _cookieHeaderBuilder!(url);
+        cookieHeader = await _cookieHeaderBuilder(url);
         if (cookieHeader != null && cookieHeader.isNotEmpty) {
           final cookieCount = cookieHeader.split(';').length;
-          print('   🍪 Using $cookieCount cookies for authentication');
+          debugPrint('   🍪 Using $cookieCount cookies for authentication');
         } else {
-          print('   ⚠️ No cookies available - may not access subscriber content');
+          debugPrint('   ⚠️ No cookies available - may not access subscriber content');
         }
       }
 
-      print('   🌐 Rendering in WebView (delay: ${delayMs}ms)...');
+      debugPrint('   🌐 Rendering in WebView (delay: ${delayMs}ms)...');
 
       // Render page in WebView with delay
       final html = await _webViewExtractor!.renderPage(
@@ -391,16 +392,16 @@ class Readability4JExtended {
       );
 
       if (html == null || html.isEmpty) {
-        print('   ❌ WebView returned empty HTML');
+        debugPrint('   ❌ WebView returned empty HTML');
         return null;
       }
 
-      print('   📄 Received HTML (${html.length} chars), extracting content...');
+      debugPrint('   📄 Received HTML (${html.length} chars), extracting content...');
 
       // Extract content from rendered HTML
       return await extractFromHtml(url, html, strategyName: 'WebView');
     } catch (e) {
-      print('   ❌ WebView extraction failed: $e');
+      debugPrint('   ❌ WebView extraction failed: $e');
       return null;
     }
   }
@@ -536,11 +537,11 @@ class Readability4JExtended {
 
     // Add cookies if builder is available
     if (_cookieHeaderBuilder != null) {
-      final cookieHeader = await _cookieHeaderBuilder!(url);
+      final cookieHeader = await _cookieHeaderBuilder(url);
       if (cookieHeader != null && cookieHeader.isNotEmpty) {
         headers['Cookie'] = cookieHeader;
         final cookieCount = cookieHeader.split(';').length;
-        print('   🍪 Using $cookieCount cookies in HTTP request');
+        debugPrint('   🍪 Using $cookieCount cookies in HTTP request');
       }
     }
 
@@ -572,10 +573,10 @@ class Readability4JExtended {
         doc.querySelector('meta[name="twitter:title"]')?.attributes['content'];
     if (twitterTitle != null && twitterTitle.isNotEmpty) return twitterTitle;
 
-    final plainTitle = doc.querySelector('title')?.text?.trim();
+    final plainTitle = doc.querySelector('title')?.text.trim();
     if (plainTitle != null && plainTitle.isNotEmpty) return plainTitle;
 
-    final h1 = doc.querySelector('h1')?.text?.trim();
+    final h1 = doc.querySelector('h1')?.text.trim();
     if (h1 != null && h1.isNotEmpty) return h1;
 
     return null;
@@ -597,7 +598,7 @@ class Readability4JExtended {
     ];
 
     for (final selector in selectors) {
-      final authorText = doc.querySelector(selector)?.text?.trim();
+      final authorText = doc.querySelector(selector)?.text.trim();
       if (authorText != null && authorText.isNotEmpty) return authorText;
     }
 
@@ -664,8 +665,8 @@ class Readability4JExtended {
           doc.querySelectorAll('script[type="application/ld+json"]');
 
       for (final script in scripts) {
-        final content = script.text?.trim();
-        if (content == null || content.isEmpty) continue;
+        final content = script.text.trim();
+        if (content.isEmpty) continue;
 
         try {
           final json = jsonDecode(content);
@@ -772,7 +773,7 @@ class Readability4JExtended {
     var score = 0.0;
 
     for (final p in paragraphs) {
-      final text = p.text?.trim() ?? '';
+      final text = p.text.trim();
       if (text.length > 50) {
         score += text.length * 1.5;
       }
@@ -780,7 +781,7 @@ class Readability4JExtended {
 
     // Penalize high link density
     final linkCount = el.querySelectorAll('a').length;
-    final textLength = el.text?.length ?? 1;
+    final textLength = el.text.length;
     final linkDensity = linkCount / (textLength / 100);
     if (linkDensity > 2.0) {
       score *= 0.5;
@@ -793,7 +794,7 @@ class Readability4JExtended {
   /// Returns both text and paragraphs list
   (String text, List<String> paragraphs) _extractMainText(dom.Element root) {
     // Use new ParagraphExtractor with density-based filtering
-    final html = root.outerHtml ?? '';
+    final html = root.outerHtml;
     final paragraphs = ParagraphExtractor.extractParagraphLines(html);
 
     // Join paragraphs with double newline for backward compatibility
@@ -850,16 +851,6 @@ class Readability4JExtended {
     if (uri.hasScheme) return uri.toString();
 
     return baseUri.resolveUri(uri).toString();
-  }
-
-  /// Normalize whitespace
-  String _normalizeWhitespace(String raw) {
-    final lines = raw
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .toList();
-    return lines.join('\n\n');
   }
 
   /// Batch extract multiple articles
