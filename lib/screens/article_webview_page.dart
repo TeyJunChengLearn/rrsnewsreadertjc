@@ -564,7 +564,14 @@ Future<void> _speakCurrentLineGlobal({bool auto = false}) async {
   }
   // Speech rate should already be set by the widget, but ensure it's set
   // (The rate persists in _globalTts once set, so this is just a safety check)
-  await _globalTts.speak(text);
+  try {
+    await _globalTts.speak(text);
+  } catch (_) {
+    state.isPlaying = false;
+    if (state.lines.isNotEmpty && state.currentLine >= 0 && state.currentLine < state.lines.length) {
+      unawaited(_showReadingNotificationGlobal(state.lines[state.currentLine]));
+    }
+  }
 }
 
 // Global function to show notification
@@ -651,6 +658,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _readerHintVisible = false;
   bool _readerHintDismissed = false;
   bool _articleLoadFailed = false; // Track if article failed to load (deleted/hidden)
+  int _mainFrameLoadAttempts = 0;
+  String? _lastRequestedUrl;
   // Reader content (one line per highlightable/speakable chunk)
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
@@ -1078,12 +1087,33 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           onPageFinished: (url) async {
             if (!mounted || _disposed) return;
             setState(() => _isLoading = false);
+            _mainFrameLoadAttempts = 0;
 
             // Automatically remove paywall overlays when page finishes loading
             // This helps user see full content even when not in reader mode
             await Future.delayed(const Duration(milliseconds: 1000));
             if (!mounted || _disposed) return;
             await _removePaywallOverlays();
+          },
+          onWebResourceError: (error) async {
+            if (!mounted || _disposed) return;
+            if (!error.isForMainFrame) return;
+
+            if (_lastRequestedUrl != null && _mainFrameLoadAttempts < 2) {
+              _mainFrameLoadAttempts++;
+              await Future.delayed(const Duration(milliseconds: 600));
+              if (!mounted || _disposed) return;
+              try {
+                await _controller.loadRequest(Uri.parse(_lastRequestedUrl!));
+                return;
+              } catch (_) {
+                // Fall through to error handling below.
+              }
+            }
+
+            _handleArticleUnavailable(
+              'Unable to load this article. Please try reloading or opening it again.',
+            );
           },
         ),
       );
@@ -1190,6 +1220,11 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       return;
     }
 
+    _lastRequestedUrl = uri.toString();
+    _mainFrameLoadAttempts++;
+    if (mounted) {
+      setState(() => _isLoading = true);
+    }
     await _controller.loadRequest(uri);
   }
 
@@ -2554,7 +2589,20 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _lastSyncedLine = _currentLine;
     // Update notification without awaiting to avoid delays during auto-advance
     unawaited(_showReadingNotification(text));
-    await _globalTts.speak(text);
+    try {
+      await _globalTts.speak(text);
+    } catch (e) {
+      debugPrint('❌ TTS speak failed: $e');
+      if (mounted) {
+        setState(() => _isPlaying = false);
+      }
+      try {
+        await WakelockPlus.disable();
+      } catch (e) {
+        debugPrint('TTS: ⚠️ Failed to disable WakeLock after speak error: $e');
+      }
+      unawaited(_clearReadingNotification());
+    }
   }
 
   void _markArticleAsRead() {
