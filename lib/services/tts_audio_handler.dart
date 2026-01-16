@@ -141,7 +141,11 @@ class TtsAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       onPositionChanged!(_articleId, _currentLine);
     }
 
-    await _tts.speak(text);
+    try {
+      await _tts.speak(text);
+    } catch (_) {
+      _updatePlaybackState(playing: false);
+    }
   }
 
   Future<void> _speakNextLine() async {
