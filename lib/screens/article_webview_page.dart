@@ -646,6 +646,8 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _isLoading = true;
   bool _readerOn = false;
   bool _paywallLikely = false;
+  bool _articleUnavailable = false;
+  String _articleUnavailableMessage = '';
   bool _readerHintVisible = false;
   bool _readerHintDismissed = false;
   bool _articleLoadFailed = false; // Track if article failed to load (deleted/hidden)
@@ -927,7 +929,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         await _loadReaderContent();
       } else {
         // Open in webview mode - load the full website
-        await _controller.loadRequest(Uri.parse(widget.url));
+        await _loadArticleUrl();
       }
 
       await _ensureLinesLoaded();
@@ -1159,7 +1161,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
           _isLoading = false;
         });
       }
-      await _controller.loadRequest(Uri.parse(widget.url));
+      await _loadArticleUrl();
       return;
     }
 
@@ -1174,6 +1176,39 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadArticleUrl() async {
+    final trimmedUrl = widget.url.trim();
+    final uri = trimmedUrl.isEmpty ? null : Uri.tryParse(trimmedUrl);
+
+    if (uri == null) {
+      _handleArticleUnavailable(
+        'This article is no longer available. It may have been removed from the feed.',
+      );
+      return;
+    }
+
+    await _controller.loadRequest(uri);
+  }
+
+  void _handleArticleUnavailable(String message) {
+    if (!mounted) return;
+
+    setState(() {
+      _articleUnavailable = true;
+      _articleUnavailableMessage = message;
+      _isLoading = false;
+      _readerOn = false;
+      _lines.clear();
+      _currentLine = 0;
+      _paywallLikely = false;
+    });
+
+    final articleId = widget.articleId ?? '';
+    if (articleId.isNotEmpty) {
+      unawaited(stopGlobalTtsForArticle(articleId));
     }
   }
 
@@ -3322,12 +3357,35 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         ),
         body: Stack(
           children: [
-            WebViewWidget(controller: _controller),
-            if (_isLoading)
+            if (!_articleUnavailable) WebViewWidget(controller: _controller),
+            if (_articleUnavailable)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.article_outlined, size: 48),
+                      const SizedBox(height: 12),
+                      Text(
+                        _articleUnavailableMessage,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        child: const Text('Go back'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_isLoading && !_articleUnavailable)
               const LinearProgressIndicator(
                 minHeight: 2,
               ),
-            if (_paywallLikely)
+            if (_paywallLikely && !_articleUnavailable)
               Positioned(
                 top: 16,
                 left: 12,
