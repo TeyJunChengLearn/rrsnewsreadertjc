@@ -8,6 +8,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/feed_item.dart';
 import '../models/feed_source.dart';
 import '../data/feed_repository.dart';
+import '../screens/article_webview_page.dart' show isGlobalTtsPlaying, getGlobalTtsArticleId, stopGlobalTts;
 
 /// Old UI uses this
 enum SortOrder {
@@ -239,6 +240,12 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx == -1) return;
 
+    // Check if hiding (read = 2) an article that's currently playing
+    if (read == 2 && isGlobalTtsPlaying() && getGlobalTtsArticleId() == item.id) {
+      debugPrint('⚠️ Stopping TTS for article being hidden: ${item.id}');
+      await stopGlobalTts();
+    }
+
     final updated = item.copyWith(isRead: read);
     _items[idx] = updated;
     notifyListeners();
@@ -252,6 +259,23 @@ List<FeedItem> get allItems => List.unmodifiable(_items);
   Future<void> hideOlderThan(FeedItem item) async {
     final cutoff = item.pubDate;
     if (cutoff == null) return;
+
+    // Check if the currently playing article will be hidden
+    if (isGlobalTtsPlaying()) {
+      final currentArticleId = getGlobalTtsArticleId();
+      final currentArticle = _items.cast<FeedItem?>().firstWhere(
+        (a) => a?.id == currentArticleId,
+        orElse: () => null,
+      );
+
+      // If current article exists and will be hidden (older than cutoff), stop TTS
+      if (currentArticle != null &&
+          currentArticle.pubDate != null &&
+          currentArticle.pubDate!.isBefore(cutoff)) {
+        debugPrint('⚠️ Stopping TTS before hiding older articles');
+        await stopGlobalTts();
+      }
+    }
 
     _loading = true;
     notifyListeners();
@@ -578,6 +602,13 @@ static const int _maxRetries = 3; // Maximum retry attempts
 
   /// Hide a single article (move to trash, isRead = 2)
   Future<void> hideArticle(FeedItem item) async {
+    // Check if this article is currently being read by TTS
+    if (isGlobalTtsPlaying() && getGlobalTtsArticleId() == item.id) {
+      // Stop TTS playback before hiding the article to prevent blank page bug
+      debugPrint('⚠️ Stopping TTS for article being hidden: ${item.id}');
+      await stopGlobalTts();
+    }
+
     await repo.updateReadStatus(item.id, 2);
     final idx = _items.indexWhere((e) => e.id == item.id);
     if (idx >= 0) {

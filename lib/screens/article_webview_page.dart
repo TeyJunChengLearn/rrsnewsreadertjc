@@ -648,6 +648,7 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   bool _paywallLikely = false;
   bool _readerHintVisible = false;
   bool _readerHintDismissed = false;
+  bool _articleLoadFailed = false; // Track if article failed to load (deleted/hidden)
   // Reader content (one line per highlightable/speakable chunk)
   final List<String> _lines = [];
   List<String>? _originalLinesCache; // for reverse after translation
@@ -2172,12 +2173,28 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     }
 
     final articleId = widget.articleId;
-    if (articleId == null || articleId.isEmpty) return null;
+    if (articleId == null || articleId.isEmpty) {
+      setState(() => _articleLoadFailed = true);
+      debugPrint('⚠️ Article ID is null or empty');
+      return null;
+    }
 
     try {
       final dao = context.read<ArticleDao>();
       final row = await dao.findById(articleId);
-      if (row == null) return null;
+
+      if (row == null) {
+        setState(() => _articleLoadFailed = true);
+        debugPrint('⚠️ Article $articleId not found in database (may have been deleted)');
+        return null;
+      }
+
+      // Check if article is hidden (isRead = 2)
+      if (row.isRead == 2) {
+        setState(() => _articleLoadFailed = true);
+        debugPrint('⚠️ Article $articleId is hidden/archived');
+        return null;
+      }
 
       final storedText = row.mainText?.trim() ?? '';
       final storedImage = row.imageUrl?.trim() ?? '';
@@ -2188,7 +2205,9 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
         imageUrl: storedImage.isNotEmpty ? storedImage : null,
         pageTitle: row.title,
       );
-    } catch (_) {
+    } catch (e) {
+      setState(() => _articleLoadFailed = true);
+      debugPrint('⚠️ Error loading article ${articleId}: $e');
       return null;
     }
   }
@@ -2678,6 +2697,15 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
     _periodicHighlightSyncTimer = null;
   }
 
+  /// Get the latest article list from provider (excludes hidden articles)
+  /// This ensures we have fresh data even if articles were deleted/hidden
+  List<FeedItem> _getLatestArticleList() {
+    final provider = context.read<RssProvider>();
+    return provider.items
+        .where((item) => item.isRead != 2) // Exclude hidden/archived articles
+        .toList();
+  }
+
   bool _hasNextArticle() {
     if (widget.allArticles.isEmpty) return false;
 
@@ -2748,23 +2776,66 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     _markCurrentArticleRead();
 
-    final nextArticle = _getNextArticle();
-    if (nextArticle == null) return;
+    // Get fresh article list from provider to avoid navigating to deleted articles
+    final freshList = _getLatestArticleList();
 
-    // Keep using the same article list (maintains sort order and navigation position)
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ArticleWebviewPage(
-          articleId: nextArticle.id,
-          url: nextArticle.link ?? '',
-          title: nextArticle.title,
-          initialMainText: nextArticle.mainText,
-          initialImageUrl: nextArticle.imageUrl,
-          allArticles: widget.allArticles,
-          autoPlay: true, // Auto-start playing the next article
+    // Update global TTS state with fresh list
+    _ttsState.allArticles = freshList;
+
+    // Find current article in fresh list
+    final currentIndex = freshList.indexWhere((a) => a.id == widget.articleId);
+
+    if (currentIndex < 0) {
+      // Current article was deleted/hidden - try to skip to first available article
+      debugPrint('⚠️ Current article not found in fresh list, skipping to first available');
+      if (freshList.isNotEmpty) {
+        final firstArticle = freshList.first;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ArticleWebviewPage(
+              articleId: firstArticle.id,
+              url: firstArticle.link ?? '',
+              title: firstArticle.title,
+              sourceTitle: firstArticle.sourceTitle,
+              initialMainText: firstArticle.mainText,
+              initialImageUrl: firstArticle.imageUrl,
+              allArticles: freshList,
+              autoPlay: true,
+            ),
+          ),
+        );
+      } else {
+        // No articles left - stop TTS and go back
+        debugPrint('⚠️ No articles available, stopping TTS');
+        stopGlobalTts();
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
+    // Get next article from fresh list
+    if (currentIndex + 1 < freshList.length) {
+      final nextArticle = freshList[currentIndex + 1];
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ArticleWebviewPage(
+            articleId: nextArticle.id,
+            url: nextArticle.link ?? '',
+            title: nextArticle.title,
+            sourceTitle: nextArticle.sourceTitle,
+            initialMainText: nextArticle.mainText,
+            initialImageUrl: nextArticle.imageUrl,
+            allArticles: freshList, // Use fresh list
+            autoPlay: true, // Auto-start playing the next article
+          ),
         ),
-      ),
-    );
+      );
+    } else {
+      // Reached end of list - stop playback
+      debugPrint('✅ Reached end of article list, stopping TTS');
+      setState(() => _isPlaying = false);
+      WakelockPlus.disable().catchError((e) => debugPrint('TTS: Failed to disable WakeLock: $e'));
+    }
   }
 
   void _goToPreviousArticle() {
@@ -2773,28 +2844,43 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     _markCurrentArticleRead();
 
-    final previousArticle = _getPreviousArticle();
+    // Get fresh article list from provider
+    final freshList = _getLatestArticleList();
 
-    // If no previous article, go back to news page
-    if (previousArticle == null) {
+    // Update global TTS state with fresh list
+    _ttsState.allArticles = freshList;
+
+    // Find current article in fresh list
+    final currentIndex = freshList.indexWhere((a) => a.id == widget.articleId);
+
+    if (currentIndex < 0) {
+      // Current article was deleted/hidden - go back to news page
+      debugPrint('⚠️ Current article not found, going back to news page');
       Navigator.of(context).pop();
       return;
     }
 
-    // Keep using the same article list (maintains sort order and navigation position)
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ArticleWebviewPage(
-          articleId: previousArticle.id,
-          url: previousArticle.link ?? '',
-          title: previousArticle.title,
-          initialMainText: previousArticle.mainText,
-          initialImageUrl: previousArticle.imageUrl,
-          allArticles: widget.allArticles,
-          autoPlay: false, // Don't auto-play when going backwards
+    // Get previous article from fresh list
+    if (currentIndex > 0) {
+      final previousArticle = freshList[currentIndex - 1];
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ArticleWebviewPage(
+            articleId: previousArticle.id,
+            url: previousArticle.link ?? '',
+            title: previousArticle.title,
+            sourceTitle: previousArticle.sourceTitle,
+            initialMainText: previousArticle.mainText,
+            initialImageUrl: previousArticle.imageUrl,
+            allArticles: freshList, // Use fresh list
+            autoPlay: false, // Don't auto-play when going backwards
+          ),
         ),
-      ),
-    );
+      );
+    } else {
+      // At the beginning - go back to news page
+      Navigator.of(context).pop();
+    }
   }
 
   void _goToNextArticleNow() {
@@ -2803,23 +2889,72 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
     _markCurrentArticleRead();
 
-    final nextArticle = _getNextArticle();
-    if (nextArticle == null) return;
+    // Get fresh article list from provider
+    final freshList = _getLatestArticleList();
 
-    // Keep using the same article list (maintains sort order and navigation position)
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => ArticleWebviewPage(
-          articleId: nextArticle.id,
-          url: nextArticle.link ?? '',
-          title: nextArticle.title,
-          initialMainText: nextArticle.mainText,
-          initialImageUrl: nextArticle.imageUrl,
-          allArticles: widget.allArticles,
-          autoPlay: true, // Auto-play when manually skipping to next article
+    // Update global TTS state with fresh list
+    _ttsState.allArticles = freshList;
+
+    // Find current article in fresh list
+    final currentIndex = freshList.indexWhere((a) => a.id == widget.articleId);
+
+    if (currentIndex < 0) {
+      // Current article was deleted/hidden - try to skip to first available article
+      debugPrint('⚠️ Current article not found, skipping to first available');
+      if (freshList.isNotEmpty) {
+        final firstArticle = freshList.first;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ArticleWebviewPage(
+              articleId: firstArticle.id,
+              url: firstArticle.link ?? '',
+              title: firstArticle.title,
+              sourceTitle: firstArticle.sourceTitle,
+              initialMainText: firstArticle.mainText,
+              initialImageUrl: firstArticle.imageUrl,
+              allArticles: freshList,
+              autoPlay: true,
+            ),
+          ),
+        );
+      } else {
+        // No articles left - stop TTS and go back
+        debugPrint('⚠️ No articles available, stopping TTS');
+        stopGlobalTts();
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
+    // Get next article from fresh list
+    if (currentIndex + 1 < freshList.length) {
+      final nextArticle = freshList[currentIndex + 1];
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ArticleWebviewPage(
+            articleId: nextArticle.id,
+            url: nextArticle.link ?? '',
+            title: nextArticle.title,
+            sourceTitle: nextArticle.sourceTitle,
+            initialMainText: nextArticle.mainText,
+            initialImageUrl: nextArticle.imageUrl,
+            allArticles: freshList, // Use fresh list
+            autoPlay: true, // Auto-play when manually skipping to next article
+          ),
         ),
-      ),
-    );
+      );
+    } else {
+      // At the end - stay on current article and show message
+      debugPrint('✅ Already at last article');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Already at the last article'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
 
@@ -3070,6 +3205,70 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
     final canTranslate = settings.translateLangCode != 'off';
+
+    // Show error UI if article failed to load (deleted/hidden)
+    if (_articleLoadFailed) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Article Not Available'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              // Stop TTS if playing
+              if (_isPlaying) {
+                await stopGlobalTts();
+              }
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
+            },
+          ),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.article_outlined,
+                  size: 64,
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Article no longer available',
+                  style: Theme.of(context).textTheme.titleLarge,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'This article may have been deleted or hidden',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    // Stop TTS if playing
+                    if (_isPlaying) {
+                      await stopGlobalTts();
+                    }
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  },
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Go Back'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return WillPopScope(
       onWillPop: _handleBackNavigation,
