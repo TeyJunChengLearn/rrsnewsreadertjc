@@ -11,76 +11,142 @@ class ArticleContentService {
   /// Fetches main article text/images for any FeedItem missing them.
   /// Returns a map of article id -> extracted content for rows that were updated.
   ///
-  /// Automatically detects paywalled sites and uses WebView extraction with delays.
-  /// Set allowWebView=false for background tasks where WebView is unavailable.
+  /// Uses simple HTTP extraction by default. WebView extraction can be enabled
+  /// per-feed via feed settings (like the Java project approach).
+  /// [delayTime] - seconds to wait after page loads (from feed settings)
+  /// [maxRetries] - max retry attempts for failed/empty content (like Java's retryCountMap)
   Future<Map<String, ArticleReadabilityResult>> backfillMissingContent(
     List<FeedItem> items, {
-    int defaultDelayMs = 2000,
-    bool allowWebView = true,
+    bool useWebView = false,
+    int delayTime = 0,
+    int maxRetries = 3,
   }) async {
     final updated = <String, ArticleReadabilityResult>{};
+    final failedItems = <FeedItem>[]; // Like Java's failedIds
+    final retryCount = <String, int>{}; // Like Java's retryCountMap
 
+    // First pass: try all items
     for (final item in items) {
-      if (item.link.isEmpty) continue;
-      final existingText = (item.mainText ?? '').trim();
-      final needsBetterText = _looksLikeTeaser(existingText);
-      final needsImage = (item.imageUrl ?? '').trim().isEmpty;
+      // Skip items that don't need enrichment
+      if (!_needsEnrichment(item)) continue;
 
-      if (!needsBetterText && !needsImage) continue;
-
-      // Auto-detect if this URL requires WebView extraction (paywalled sites)
-      // Only use WebView if allowed (not available in background tasks)
-      final shouldUseWebView = allowWebView && _isPaywalledDomain(item.link);
-      final delayMs = shouldUseWebView ? _getOptimalDelay(item.link) : 0;
-
-      print('🔍 Enriching: ${item.title}');
-      print('   URL: ${item.link}');
-      print('   WebView: $shouldUseWebView, Delay: ${delayMs}ms');
-
-      final content = await readability.extractMainContent(
-        item.link,
-        useWebView: shouldUseWebView,
-        delayMs: delayMs,
+      final result = await _extractSingleItem(
+        item,
+        useWebView: useWebView,
+        delayTime: delayTime,
       );
 
-      if (content == null) {
-        print('   ❌ Extraction failed (returned null)');
-        continue;
+      if (result != null) {
+        await articleDao.updateContent(item.id, result.mainText, result.imageUrl);
+        updated[item.id] = result;
+      } else {
+        // Add to failed list for retry (like Java's failedIds.add())
+        failedItems.add(item);
+        retryCount[item.id] = 0;
       }
+    }
 
-      final extractedLength = content.mainText?.trim().length ?? 0;
-      print('   ✓ Extracted ${extractedLength} chars (source: ${content.source})');
+    // Retry failed items (like Java's retry logic lines 117-126)
+    while (failedItems.isNotEmpty) {
+      final item = failedItems.removeAt(0);
+      final attempts = retryCount[item.id] ?? 0;
 
-      if (extractedLength < 150) {
-        print('   ⚠️ Content too short (< 150 chars), likely incomplete');
-      }
+      if (attempts < maxRetries) {
+        retryCount[item.id] = attempts + 1;
+        print('🔄 Retrying ${item.title} (attempt ${attempts + 1}/$maxRetries)');
 
-      final updates = <String, String?>{};
-      final trimmedText = content.mainText?.trim();
-      if ((needsBetterText || needsImage) && (trimmedText ?? '').isNotEmpty) {
-        final longerThanExisting =
-            (existingText.isEmpty) || ((trimmedText?.length ?? 0) > existingText.length);
-        if (longerThanExisting || needsBetterText) {
-          updates['mainText'] = trimmedText;
+        final result = await _extractSingleItem(
+          item,
+          useWebView: useWebView,
+          delayTime: delayTime,
+        );
+
+        if (result != null) {
+          await articleDao.updateContent(item.id, result.mainText, result.imageUrl);
+          updated[item.id] = result;
+          print('   ✅ Retry successful!');
+        } else {
+          // Still failed, add back to queue if more retries left
+          if (attempts + 1 < maxRetries) {
+            failedItems.add(item);
+          } else {
+            print('   ❌ Max retries reached for: ${item.title}');
+          }
         }
       }
-
-      final leadImage = content.imageUrl?.trim();
-      if (needsImage && (leadImage ?? '').isNotEmpty) {
-        updates['imageUrl'] = leadImage;
-      }
-
-      if (updates.isEmpty) continue;
-
-      await articleDao.updateContent(item.id, updates['mainText'], updates['imageUrl']);
-      updated[item.id] = ArticleReadabilityResult(
-        mainText: updates['mainText'],
-        imageUrl: updates['imageUrl'],
-        pageTitle: content.pageTitle,
-      );
     }
 
     return updated;
+  }
+
+  /// Check if item needs enrichment
+  bool _needsEnrichment(FeedItem item) {
+    if (item.link.isEmpty) return false;
+    final existingText = (item.mainText ?? '').trim();
+    final needsBetterText = _looksLikeTeaser(existingText);
+    final needsImage = (item.imageUrl ?? '').trim().isEmpty;
+    return needsBetterText || needsImage;
+  }
+
+  /// Extract content for a single item
+  /// Returns null if extraction failed or content is empty/too short
+  Future<ArticleReadabilityResult?> _extractSingleItem(
+    FeedItem item, {
+    required bool useWebView,
+    required int delayTime,
+  }) async {
+    final existingText = (item.mainText ?? '').trim();
+    final needsBetterText = _looksLikeTeaser(existingText);
+    final needsImage = (item.imageUrl ?? '').trim().isEmpty;
+
+    print('🔍 Enriching: ${item.title}');
+    print('   URL: ${item.link}');
+    if (useWebView) {
+      print('   WebView: true, delay: ${delayTime}s');
+    }
+
+    final content = await readability.extractMainContent(
+      item.link,
+      useWebView: useWebView,
+      delayTime: delayTime,
+    );
+
+    if (content == null) {
+      print('   ❌ Extraction failed (returned null)');
+      return null;
+    }
+
+    final extractedLength = content.mainText?.trim().length ?? 0;
+    print('   ✓ Extracted ${extractedLength} chars (source: ${content.source})');
+
+    // Like Java: if content is empty, treat as failed (line 354, 407-409)
+    if (extractedLength < 150) {
+      print('   ⚠️ Content too short (< 150 chars), will retry');
+      return null;
+    }
+
+    final updates = <String, String?>{};
+    final trimmedText = content.mainText?.trim();
+    if ((needsBetterText || needsImage) && (trimmedText ?? '').isNotEmpty) {
+      final longerThanExisting =
+          (existingText.isEmpty) || ((trimmedText?.length ?? 0) > existingText.length);
+      if (longerThanExisting || needsBetterText) {
+        updates['mainText'] = trimmedText;
+      }
+    }
+
+    final leadImage = content.imageUrl?.trim();
+    if (needsImage && (leadImage ?? '').isNotEmpty) {
+      updates['imageUrl'] = leadImage;
+    }
+
+    if (updates.isEmpty) return null;
+
+    return ArticleReadabilityResult(
+      mainText: updates['mainText'],
+      imageUrl: updates['imageUrl'],
+      pageTitle: content.pageTitle,
+    );
   }
 
   Future<void> saveExtractedContent({
@@ -146,98 +212,4 @@ bool _looksLikeTeaser(String? text) {
   }
 
   return false;
-}
-
-/// Detects if a URL is from a known paywalled domain or Javascript-heavy site
-/// that requires WebView extraction with delays.
-/// Returns true for sites like Malaysiakini, NYT, WSJ, Harian Metro, etc.
-bool _isPaywalledDomain(String url) {
-  try {
-    final uri = Uri.parse(url);
-    final host = uri.host.toLowerCase();
-
-    // List of known paywalled domains and Javascript-heavy sites
-    const paywalledDomains = [
-      'malaysiakini.com',
-      'nytimes.com',
-      'wsj.com',
-      'bloomberg.com',
-      'ft.com',
-      'economist.com',
-      'washingtonpost.com',
-      'medium.com',
-      'wired.com',
-      'theatlantic.com',
-      'hmetro.com.my',           // Harian Metro - Javascript-heavy
-      'harakahdaily.net',        // Javascript-heavy Malaysian news
-      'sinchew.com.my',          // Sin Chew Daily - Javascript-heavy
-      'orientaldaily.com.my',    // Oriental Daily - Javascript-heavy
-      'thestar.com.my',          // The Star - Some articles paywalled
-      'freemalaysiatoday.com',   // Javascript-heavy
-    ];
-
-    for (final domain in paywalledDomains) {
-      if (host.contains(domain)) {
-        return true;
-      }
-    }
-
-    return false;
-  } catch (_) {
-    return false;
-  }
-}
-
-/// Returns the optimal WebView delay for a given URL
-/// Different sites require different delays for JavaScript to fully load
-int _getOptimalDelay(String url) {
-  try {
-    final uri = Uri.parse(url);
-    final host = uri.host.toLowerCase();
-
-    // Malaysian news sites with heavy JavaScript/authentication
-    // These need longer delays to fully load subscriber content
-    const heavyJsSites = {
-      'malaysiakini.com': 6000,      // Malaysiakini needs 6 seconds for auth
-      'mkini.bz': 6000,               // Malaysiakini short domain
-      'hmetro.com.my': 5000,          // Harian Metro
-      'harakahdaily.net': 5000,       // Harakah Daily
-      'sinchew.com.my': 5000,         // Sin Chew Daily
-      'orientaldaily.com.my': 5000,   // Oriental Daily
-      'freemalaysiatoday.com': 4000,  // FMT
-    };
-
-    // International paywall sites
-    // These also need extra time for authentication checks
-    const internationalPaywalls = {
-      'nytimes.com': 5000,
-      'wsj.com': 5000,
-      'bloomberg.com': 4000,
-      'ft.com': 5000,
-      'economist.com': 4000,
-      'washingtonpost.com': 4000,
-      'medium.com': 3000,
-      'wired.com': 3000,
-      'theatlantic.com': 3000,
-    };
-
-    // Check Malaysian sites first (higher priority)
-    for (final entry in heavyJsSites.entries) {
-      if (host.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-
-    // Check international sites
-    for (final entry in internationalPaywalls.entries) {
-      if (host.contains(entry.key)) {
-        return entry.value;
-      }
-    }
-
-    // Default delay for other paywalled sites
-    return 3000;
-  } catch (_) {
-    return 3000; // Default 3 seconds
-  }
 }

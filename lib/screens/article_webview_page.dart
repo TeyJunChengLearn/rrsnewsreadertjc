@@ -1449,11 +1449,10 @@ class _ArticleWebviewPageState extends State<ArticleWebviewPage> with WidgetsBin
 
   /// Get the latest article list from provider (excludes hidden articles)
   /// This ensures we have fresh data even if articles were deleted/hidden
+  /// Uses visibleItems to respect the user's sort order preference
   List<FeedItem> _getLatestArticleList() {
     final provider = context.read<RssProvider>();
-    return provider.items
-        .where((item) => item.isRead != 2) // Exclude hidden/archived articles
-        .toList();
+    return provider.visibleItems; // Already sorted and filtered by provider
   }
 
   bool _hasNextArticle() {

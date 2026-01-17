@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Android-only helper that renders pages in an off-screen WebView and returns
@@ -42,6 +43,39 @@ class AndroidWebViewExtractor {
     } on MissingPluginException {
       return null;
     }
+  }
+
+  /// Renders [url] in WebView and waits [delayTime] after page loads.
+  /// Matches Java project's TtsExtractor approach:
+  /// 1. Load URL in WebView
+  /// 2. Wait for onPageFinished (page fully loaded)
+  /// 3. Wait [delayTime] seconds for JS/paywall content
+  /// 4. Extract HTML
+  ///
+  /// - [delayTime]: Time to wait after page loads (default 0, set per feed)
+  Future<String?> renderPageWithDelay(
+    String url, {
+    int delayTime = 0,
+    String? userAgent,
+    String? cookieHeader,
+  }) async {
+    debugPrint('   🌐 Loading page, will wait ${delayTime}s after load...');
+
+    final html = await renderPage(
+      url,
+      timeout: const Duration(seconds: 30),
+      postLoadDelay: Duration(seconds: delayTime),
+      userAgent: userAgent,
+      cookieHeader: cookieHeader,
+    );
+
+    if (html == null || html.isEmpty) {
+      debugPrint('   ❌ Failed to get HTML');
+      return null;
+    }
+
+    debugPrint('   ✅ Got HTML (${html.length} chars) after ${delayTime}s delay');
+    return html;
   }
   Future<String?> renderPageEnhanced(
     String url, {

@@ -61,6 +61,29 @@ class _NewsPageState extends State<NewsPage> {
     super.dispose();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Sync local sort order with provider (e.g., after backup import)
+    _syncSortOrderWithProvider();
+  }
+
+  void _syncSortOrderWithProvider() {
+    final rss = context.read<RssProvider>();
+    final providerOrder = rss.sortOrder;
+    final localOrder = _sortOrder == _LocalSortOrder.latestFirst
+        ? SortOrder.latestFirst
+        : SortOrder.oldestFirst;
+
+    if (providerOrder != localOrder) {
+      setState(() {
+        _sortOrder = providerOrder == SortOrder.latestFirst
+            ? _LocalSortOrder.latestFirst
+            : _LocalSortOrder.oldestFirst;
+      });
+    }
+  }
+
   void _startTtsStateCheck() {
     // Check immediately after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {

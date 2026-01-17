@@ -64,6 +64,7 @@ class RssProvider extends ChangeNotifier {
   // for bottom sheet chips
   bool get isLatestFirst => _sortOrder == SortOrder.latestFirst;
   bool get isOldestFirst => _sortOrder == SortOrder.oldestFirst;
+  SortOrder get sortOrder => _sortOrder;
 
   bool get showAllArticles =>
       _bookmarkFilter == BookmarkFilter.all && _readFilter == ReadFilter.all;

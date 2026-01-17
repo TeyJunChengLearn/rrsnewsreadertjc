@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 import 'package:xml/xml.dart';
 
 import 'android_webview_extractor.dart';
-import 'paragraph_extractor.dart';
 
 /// Result of article extraction
 class ArticleReadabilityResult {
@@ -312,22 +311,25 @@ class Readability4JExtended {
 
   /// Main extraction method
   ///
-  /// Follows WebView-first strategy (like Java project):
-  /// 1. If [useWebView] is true and WebView extractor is available, render page with [delayMs]
+  /// Follows WebView-first strategy (like Java project's TtsExtractor):
+  /// 1. If [useWebView] is true, load page in WebView and wait [delayTime] seconds
   /// 2. Extract content from rendered HTML using Readability algorithm
   /// 3. Fallback to HTTP-based extraction if WebView fails or unavailable
   /// 4. Try RSS feed as final fallback
+  ///
+  /// [delayTime] - seconds to wait after page loads (from feed settings, like Java)
   Future<ArticleReadabilityResult?> extractMainContent(
     String url, {
     bool useWebView = false,
-    int delayMs = 2000,
+    int delayTime = 0,
   }) async {
     try {
       await _respectRateLimit(url);
 
       // STRATEGY 1: WebView-first (for paywalled/login-required sites)
+      // Waits delayTime seconds after page loads (like Java's TtsExtractor)
       if (useWebView && _webViewExtractor != null) {
-        final webViewResult = await _extractFromWebView(url, delayMs);
+        final webViewResult = await _extractFromWebView(url, delayTime);
         if (webViewResult != null && webViewResult.hasFullContent) {
           return webViewResult;
         }
@@ -361,13 +363,10 @@ class Readability4JExtended {
 
   /// Extract content using WebView rendering (like Java project's TtsExtractor)
   /// 1. Loads URL in headless WebView with JavaScript enabled
-  /// 2. Waits [delayMs] for dynamic content to load
+  /// 2. Waits for onPageFinished, then waits [delayTime] seconds
   /// 3. Executes JavaScript to get full HTML: document.documentElement.outerHTML
   /// 4. Extracts main content using Readability algorithm
-  Future<ArticleReadabilityResult?> _extractFromWebView(
-    String url,
-    int delayMs,
-  ) async {
+  Future<ArticleReadabilityResult?> _extractFromWebView(String url, int delayTime) async {
     try {
       // Get cookies for authentication
       String? cookieHeader;
@@ -381,12 +380,12 @@ class Readability4JExtended {
         }
       }
 
-      debugPrint('   🌐 Rendering in WebView (delay: ${delayMs}ms)...');
+      debugPrint('   🌐 Rendering in WebView (delay: ${delayTime}s after load)...');
 
-      // Render page in WebView with delay
-      final html = await _webViewExtractor!.renderPage(
+      // Render page and wait delayTime after load (like Java's TtsExtractor)
+      final html = await _webViewExtractor!.renderPageWithDelay(
         url,
-        postLoadDelay: Duration(milliseconds: delayMs),
+        delayTime: delayTime,
         userAgent: _config.userAgent,
         cookieHeader: cookieHeader,
       );
@@ -790,17 +789,49 @@ class Readability4JExtended {
     return score.toInt();
   }
 
-  /// Extract main text using improved density-based filtering
+  /// Delimiter used to separate paragraphs
+  static const String delimiter = '\n';
+
+  /// Extract main text using tag-based extraction (matches Java project's TtsExtractor)
   /// Returns both text and paragraphs list
   (String text, List<String> paragraphs) _extractMainText(dom.Element root) {
-    // Use new ParagraphExtractor with density-based filtering
-    final html = root.outerHtml;
-    final paragraphs = ParagraphExtractor.extractParagraphLines(html);
+    // Tags to extract from (matches Java: h2,h3,h4,h5,h6,p,td,pre,th,li,figcaption,blockquote,section)
+    const contentTags = {
+      'h2', 'h3', 'h4', 'h5', 'h6',
+      'p', 'td', 'pre', 'th', 'li',
+      'figcaption', 'blockquote', 'section'
+    };
 
-    // Join paragraphs with double newline for backward compatibility
-    final text = paragraphs.join('\n\n');
+    final paragraphs = <String>[];
 
-    return (text, paragraphs);
+    // Iterate through all elements (matches Java's doc.getAllElements())
+    for (final element in root.querySelectorAll('*')) {
+      final tagName = element.localName?.toLowerCase() ?? '';
+      if (!contentTags.contains(tagName)) continue;
+
+      // Skip if element has child with same content tag (avoid duplicates)
+      // Matches Java: for (Element child : element.children()) { if (tags.contains(child.tagName())) sameContent = true; }
+      bool hasChildWithSameTag = false;
+      for (final child in element.children) {
+        final childTag = child.localName?.toLowerCase() ?? '';
+        if (contentTags.contains(childTag)) {
+          hasChildWithSameTag = true;
+          break;
+        }
+      }
+      if (hasChildWithSameTag) continue;
+
+      // Get text and check length > 1 (matches Java: text.length() > 1)
+      final text = element.text.trim();
+      if (text.isNotEmpty && text.length > 1) {
+        paragraphs.add(text);
+      }
+    }
+
+    // Join with delimiter (matches Java's delimiter = "--####--")
+    final joinedText = paragraphs.join(delimiter);
+
+    return (joinedText, paragraphs);
   }
 
   /// Extract hero image
@@ -875,26 +906,42 @@ class Readability4JExtended {
     return results;
   }
 
-  /// Extract paragraphs from HTML using density-based filtering
+  /// Extract paragraphs from HTML using tag-based extraction (matches Java project)
   ///
   /// Returns List of String where each element is one paragraph.
-  /// Use with compute() for better performance:
-  /// ```dart
-  /// final result = await readability.extractMainContent(url);
-  /// if (result?.paragraphs != null) {
-  ///   // Use result.paragraphs directly
-  /// }
-  /// ```
-  ///
-  /// Or extract from raw HTML:
-  /// ```dart
-  /// final paragraphs = await compute(
-  ///   ParagraphExtractor.extractParagraphLines,
-  ///   htmlString,
-  /// );
-  /// ```
-  static Future<List<String>> extractParagraphsFromHtml(String html) async {
-    return ParagraphExtractor.extractParagraphLines(html);
+  /// Tags extracted: h2, h3, h4, h5, h6, p, td, pre, th, li, figcaption, blockquote, section
+  static List<String> extractParagraphsFromHtml(String html) {
+    const contentTags = {
+      'h2', 'h3', 'h4', 'h5', 'h6',
+      'p', 'td', 'pre', 'th', 'li',
+      'figcaption', 'blockquote', 'section'
+    };
+
+    final doc = html_parser.parseFragment(html);
+    final paragraphs = <String>[];
+
+    for (final element in doc.querySelectorAll('*')) {
+      final tagName = element.localName?.toLowerCase() ?? '';
+      if (!contentTags.contains(tagName)) continue;
+
+      // Skip if element has child with same content tag (avoid duplicates)
+      bool hasChildWithSameTag = false;
+      for (final child in element.children) {
+        final childTag = child.localName?.toLowerCase() ?? '';
+        if (contentTags.contains(childTag)) {
+          hasChildWithSameTag = true;
+          break;
+        }
+      }
+      if (hasChildWithSameTag) continue;
+
+      final text = element.text.trim();
+      if (text.isNotEmpty && text.length > 1) {
+        paragraphs.add(text);
+      }
+    }
+
+    return paragraphs;
   }
 
   /// Extract from existing HTML

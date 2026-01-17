@@ -17,7 +17,8 @@
       "Bash(find:*)",
       "Bash(flutter pub run:*)",
       "Bash(git show:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(dir \"C:\\\\FYP\\\\RSSNewsReader2025\" /b)"
     ],
     "deny": [],
     "ask": []

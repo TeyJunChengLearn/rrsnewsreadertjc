@@ -68,7 +68,11 @@ extension _ArticleWebviewPageReader on _ArticleWebviewPageState {
     // Colors for light and dark mode
     final bgColor = isDark ? '#121212' : '#fff';
     final textColor = isDark ? '#e0e0e0' : '#000';
+    final secondaryColor = isDark ? '#888' : '#666';
     final highlightColor = isDark ? 'rgba(255,235,59,0.3)' : 'rgba(255,235,59,0.4)';
+
+    // Get article date (not spoken by TTS)
+    final dateStr = _getArticleDateString();
 
     final buffer = StringBuffer();
     buffer.writeln('<html><head>'
@@ -77,10 +81,11 @@ extension _ArticleWebviewPageReader on _ArticleWebviewPageState {
         'body{margin:0;background:$bgColor;color:$textColor;font-family:-apple-system,BlinkMacSystemFont,system-ui,Roboto,"Segoe UI",sans-serif;}'
         '.wrap{max-width:760px;margin:0 auto;padding:16px;}'
         'img.hero{width:100%;height:auto;border-radius:8px;margin-bottom:16px;object-fit:cover;}'
+        '.article-meta{font-size:0.85rem;color:$secondaryColor;margin-bottom:0.8rem;}'
         'p{font-size:1.02rem;line-height:1.7;margin:0 0 1rem 0;color:$textColor;}'
         'p.hl{background-color:$highlightColor !important;}'
         // treat first line (index 0) as header
-        'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:1.2rem;}'
+        'p[data-idx="0"]{font-size:1.25rem;font-weight:600;margin-bottom:0.5rem;}'
         '</style>');
     buffer.writeln('<script>'
         'window.flutterHighlightLine=function(index){'
@@ -126,6 +131,14 @@ extension _ArticleWebviewPageReader on _ArticleWebviewPageState {
           .replaceAll('<', '&lt;')
           .replaceAll('>', '&gt;');
       buffer.writeln('<p data-idx="$i">$escaped</p>');
+
+      // Add date and source after title (index 0) - not spoken by TTS
+      if (i == 0 && (dateStr != null || widget.sourceTitle != null)) {
+        final parts = <String>[];
+        if (dateStr != null) parts.add(dateStr);
+        if (widget.sourceTitle != null) parts.add(widget.sourceTitle!);
+        buffer.writeln('<div class="article-meta">${parts.join(' · ')}</div>');
+      }
     }
 
     buffer.writeln('</div></body></html>');
@@ -164,5 +177,48 @@ extension _ArticleWebviewPageReader on _ArticleWebviewPageState {
     if (pagePaywalled && wordCount < 100) return true;
 
     return false;
+  }
+
+  /// Get formatted date string for display (not spoken by TTS)
+  String? _getArticleDateString() {
+    if (widget.articleId == null || widget.allArticles.isEmpty) {
+      return null;
+    }
+
+    try {
+      final article = widget.allArticles.firstWhere(
+        (a) => a.id == widget.articleId,
+        orElse: () => widget.allArticles.first,
+      );
+
+      final pubDate = article.pubDate;
+      if (pubDate == null) return null;
+
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final yesterday = today.subtract(const Duration(days: 1));
+      final articleDate = DateTime(pubDate.year, pubDate.month, pubDate.day);
+
+      String timeStr = _formatTimeForDate(pubDate);
+
+      if (articleDate == today) {
+        return 'Today $timeStr';
+      } else if (articleDate == yesterday) {
+        return 'Yesterday $timeStr';
+      } else {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return '${months[pubDate.month - 1]} ${pubDate.day}, ${pubDate.year}';
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _formatTimeForDate(DateTime date) {
+    final hour = date.hour > 12 ? date.hour - 12 : (date.hour == 0 ? 12 : date.hour);
+    final minute = date.minute.toString().padLeft(2, '0');
+    final period = date.hour >= 12 ? 'PM' : 'AM';
+    return '$hour:$minute $period';
   }
 }

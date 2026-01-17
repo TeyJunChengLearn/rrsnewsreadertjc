@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:flutter_rss_reader/models/backup_data.dart';
 import 'package:flutter_rss_reader/models/feed_item.dart';
 import 'package:flutter_rss_reader/models/feed_source.dart';
@@ -193,6 +194,7 @@ class LocalBackupService {
 
   Future<BackupData> _gatherAllData() async {
     final dbService = DatabaseService();
+    final db = await dbService.database;
     final feedSourceDao = FeedSourceDao(dbService);
     final articleDao = ArticleDao(dbService);
     final prefs = await SharedPreferences.getInstance();
@@ -215,14 +217,35 @@ class LocalBackupService {
       );
     }).toList();
 
+    // Query deleted_articles table
+    final deletedRows = await db.query('deleted_articles');
+    final deletedArticles = deletedRows.map((row) {
+      return DeletedArticleEntry(
+        id: row['id'] as String,
+        deletedAtMillis: row['deletedAtMillis'] as int,
+      );
+    }).toList();
+
     final settings = <String, dynamic>{
+      // Interface settings
       'darkTheme': prefs.getBool('darkTheme'),
       'displaySummary': prefs.getBool('displaySummary'),
       'highlightText': prefs.getBool('highlightText'),
+      // Sync settings
       'updateIntervalMinutes': prefs.getInt('updateIntervalMinutes'),
       'articleLimitPerFeed': prefs.getInt('articleLimitPerFeed'),
+      // TTS settings
       'ttsSpeechRate': prefs.getDouble('ttsSpeechRate'),
+      'customSpeedPerFeed': prefs.getBool('customSpeedPerFeed'),
+      'defaultOriginalSpeed': prefs.getDouble('defaultOriginalSpeed'),
+      'defaultTranslatedSpeed': prefs.getDouble('defaultTranslatedSpeed'),
+      'feedSpeedSettings': prefs.getString('feedSpeedSettings'), // JSON string
+      // Translation settings
       'translateLangCode': prefs.getString('translate_lang_code'),
+      'autoTranslate': prefs.getBool('autoTranslate'),
+      // Filter settings
+      'sortOrder': prefs.getString('sortOrder'),
+      'news_sort_order': prefs.getString('news_sort_order'),
     };
 
     final domains = feedSources.map((fs) {
@@ -245,6 +268,7 @@ class LocalBackupService {
         articles: articleMetadata,
         settings: settings,
         cookies: cookies,
+        deletedArticles: deletedArticles,
       ),
     );
   }
@@ -259,6 +283,7 @@ class LocalBackupService {
     if (!merge) {
       await db.delete('feed_sources');
       await db.delete('articles');
+      await db.delete('deleted_articles');
       await prefs.clear();
       await _cookieBridge.clearCookies();
     }
@@ -287,10 +312,39 @@ class LocalBackupService {
 
     if (merge) {
       await articleDao.upsertArticles(feedItems);
+      // upsertArticles doesn't restore isRead/isBookmarked, so update them separately
+      debugPrint('LocalBackupService: Restoring article states (isRead, isBookmarked, readingPosition)...');
+      for (final meta in data.articles) {
+        await db.update(
+          'articles',
+          {
+            'isRead': meta.isRead,
+            'isBookmarked': meta.isBookmarked ? 1 : 0,
+            if (meta.readingPosition != null) 'readingPosition': meta.readingPosition,
+          },
+          where: 'id = ?',
+          whereArgs: [meta.id],
+        );
+      }
     } else {
       for (final item in feedItems) {
         final map = item.toMap();
         await db.insert('articles', map);
+      }
+    }
+
+    // Import deleted_articles
+    if (data.deletedArticles.isNotEmpty) {
+      debugPrint('LocalBackupService: Importing ${data.deletedArticles.length} deleted article entries');
+      for (final deleted in data.deletedArticles) {
+        await db.insert(
+          'deleted_articles',
+          {
+            'id': deleted.id,
+            'deletedAtMillis': deleted.deletedAtMillis,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
       }
     }
 
@@ -336,12 +390,17 @@ class LocalBackupService {
 
       // Gather all data
       final dbService = DatabaseService();
+      final db = await dbService.database;
       final feedSourceDao = FeedSourceDao(dbService);
       final articleDao = ArticleDao(dbService);
       final prefs = await SharedPreferences.getInstance();
 
       final feedSources = await feedSourceDao.getAllSources();
       final allArticles = await articleDao.getAllArticles();
+
+      // Query deleted_articles before building XML
+      final deletedRows = await db.query('deleted_articles');
+      debugPrint('LocalBackupService: Found ${deletedRows.length} deleted article entries');
 
       // Get cookies before building XML
       final domains = feedSources.map((fs) {
@@ -376,19 +435,38 @@ class LocalBackupService {
         builder.element('body', nest: () {
           // Export settings
           builder.element('setting', nest: () {
+            // Interface settings
             builder.attribute('darkTheme', prefs.getBool('darkTheme')?.toString() ?? 'false');
             builder.attribute('displaySummary', prefs.getBool('displaySummary')?.toString() ?? 'true');
             builder.attribute('highlightText', prefs.getBool('highlightText')?.toString() ?? 'false');
+            // Sync settings
             builder.attribute('updateIntervalMinutes', prefs.getInt('updateIntervalMinutes')?.toString() ?? '30');
             builder.attribute('articleLimitPerFeed', prefs.getInt('articleLimitPerFeed')?.toString() ?? '1000');
+            // TTS settings
             builder.attribute('ttsSpeechRate', prefs.getDouble('ttsSpeechRate')?.toString() ?? '0.5');
+            builder.attribute('customSpeedPerFeed', prefs.getBool('customSpeedPerFeed')?.toString() ?? 'false');
+            builder.attribute('defaultOriginalSpeed', prefs.getDouble('defaultOriginalSpeed')?.toString() ?? '0.5');
+            builder.attribute('defaultTranslatedSpeed', prefs.getDouble('defaultTranslatedSpeed')?.toString() ?? '0.5');
+            builder.attribute('feedSpeedSettings', prefs.getString('feedSpeedSettings') ?? '{}');
+            // Translation settings
             builder.attribute('translateLangCode', prefs.getString('translate_lang_code') ?? '');
+            builder.attribute('autoTranslate', prefs.getBool('autoTranslate')?.toString() ?? 'false');
+            // Filter settings
+            builder.attribute('sortOrder', prefs.getString('sortOrder') ?? 'latestFirst');
+            builder.attribute('news_sort_order', prefs.getString('news_sort_order') ?? 'latest');
           });
 
           // Export cookies
           if (cookies.isNotEmpty) {
             builder.element('cookies', nest: () {
               builder.attribute('data', json.encode(cookies));
+            });
+          }
+
+          // Export deleted_articles
+          if (deletedRows.isNotEmpty) {
+            builder.element('deletedArticles', nest: () {
+              builder.attribute('data', json.encode(deletedRows));
             });
           }
 
@@ -508,6 +586,7 @@ class LocalBackupService {
       if (!merge) {
         await db.delete('feed_sources');
         await db.delete('articles');
+        await db.delete('deleted_articles');
         await prefs.clear();
         await _cookieBridge.clearCookies();
       }
@@ -517,6 +596,7 @@ class LocalBackupService {
       if (settingElement != null) {
         debugPrint('LocalBackupService: Importing settings...');
         try {
+          // Interface settings
           final darkTheme = settingElement.getAttribute('darkTheme');
           if (darkTheme != null) prefs.setBool('darkTheme', darkTheme == 'true');
 
@@ -526,18 +606,49 @@ class LocalBackupService {
           final highlightText = settingElement.getAttribute('highlightText');
           if (highlightText != null) prefs.setBool('highlightText', highlightText == 'true');
 
+          // Sync settings
           final updateInterval = settingElement.getAttribute('updateIntervalMinutes');
           if (updateInterval != null) prefs.setInt('updateIntervalMinutes', int.parse(updateInterval));
 
           final articleLimit = settingElement.getAttribute('articleLimitPerFeed');
           if (articleLimit != null) prefs.setInt('articleLimitPerFeed', int.parse(articleLimit));
 
+          // TTS settings
           final speechRate = settingElement.getAttribute('ttsSpeechRate');
           if (speechRate != null) prefs.setDouble('ttsSpeechRate', double.parse(speechRate));
 
+          final customSpeedPerFeed = settingElement.getAttribute('customSpeedPerFeed');
+          if (customSpeedPerFeed != null) prefs.setBool('customSpeedPerFeed', customSpeedPerFeed == 'true');
+
+          final defaultOriginalSpeed = settingElement.getAttribute('defaultOriginalSpeed');
+          if (defaultOriginalSpeed != null) prefs.setDouble('defaultOriginalSpeed', double.parse(defaultOriginalSpeed));
+
+          final defaultTranslatedSpeed = settingElement.getAttribute('defaultTranslatedSpeed');
+          if (defaultTranslatedSpeed != null) prefs.setDouble('defaultTranslatedSpeed', double.parse(defaultTranslatedSpeed));
+
+          final feedSpeedSettings = settingElement.getAttribute('feedSpeedSettings');
+          if (feedSpeedSettings != null && feedSpeedSettings.isNotEmpty && feedSpeedSettings != '{}') {
+            prefs.setString('feedSpeedSettings', feedSpeedSettings);
+          }
+
+          // Translation settings
           final translateLang = settingElement.getAttribute('translateLangCode');
           if (translateLang != null && translateLang.isNotEmpty) {
             prefs.setString('translate_lang_code', translateLang);
+          }
+
+          final autoTranslate = settingElement.getAttribute('autoTranslate');
+          if (autoTranslate != null) prefs.setBool('autoTranslate', autoTranslate == 'true');
+
+          // Filter settings
+          final sortOrder = settingElement.getAttribute('sortOrder');
+          if (sortOrder != null && sortOrder.isNotEmpty) {
+            prefs.setString('sortOrder', sortOrder);
+          }
+
+          final newsSortOrder = settingElement.getAttribute('news_sort_order');
+          if (newsSortOrder != null && newsSortOrder.isNotEmpty) {
+            prefs.setString('news_sort_order', newsSortOrder);
           }
         } catch (e) {
           debugPrint('LocalBackupService: Error importing settings: $e');
@@ -571,6 +682,33 @@ class LocalBackupService {
         }
       } else {
         debugPrint('LocalBackupService: No cookies element found in OPML (standard OPML from other apps)');
+      }
+
+      // Import deleted_articles (optional - only in our custom format)
+      final deletedArticlesElement = body.findElements('deletedArticles').firstOrNull;
+      if (deletedArticlesElement != null) {
+        debugPrint('LocalBackupService: Importing deleted articles...');
+        try {
+          final deletedData = deletedArticlesElement.getAttribute('data');
+          if (deletedData != null) {
+            final deletedList = json.decode(deletedData) as List<dynamic>;
+            debugPrint('LocalBackupService: Found ${deletedList.length} deleted article entries');
+
+            for (final entry in deletedList) {
+              final map = entry as Map<String, dynamic>;
+              await db.insert(
+                'deleted_articles',
+                {
+                  'id': map['id'] as String,
+                  'deletedAtMillis': map['deletedAtMillis'] as int,
+                },
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            }
+          }
+        } catch (e) {
+          debugPrint('LocalBackupService: Error importing deleted articles: $e');
+        }
       }
 
       // Import feeds - find ALL outline elements recursively (standard OPML support)
@@ -616,6 +754,7 @@ class LocalBackupService {
         final entries = outline.findElements('entry');
         if (entries.isNotEmpty) {
           final feedItems = <FeedItem>[];
+          final articleStates = <Map<String, dynamic>>[]; // Store states for later update
 
           for (final entry in entries) {
             try {
@@ -624,7 +763,9 @@ class LocalBackupService {
               final link = entry.getAttribute('link') ?? '';
               final imageUrl = entry.getAttribute('imageUrl');
               final pubDateMillis = entry.getAttribute('pubDateMillis');
-              final isRead = entry.getAttribute('isRead') == 'true' ? 1 : 0;
+              final isReadStr = entry.getAttribute('isRead') ?? '0';
+              // Handle both numeric ("0", "1", "2") and boolean ("true", "false") formats
+              final isRead = int.tryParse(isReadStr) ?? (isReadStr == 'true' ? 1 : 0);
               final isBookmarked = entry.getAttribute('isBookmarked') == 'true';
               final readingPosition = entry.getAttribute('readingPosition');
 
@@ -643,6 +784,14 @@ class LocalBackupService {
                 isBookmarked: isBookmarked,
                 readingPosition: readingPosition != null ? int.tryParse(readingPosition) : null,
               ));
+
+              // Store state for later update (needed because upsertArticles ignores these)
+              articleStates.add({
+                'id': id,
+                'isRead': isRead,
+                'isBookmarked': isBookmarked ? 1 : 0,
+                'readingPosition': readingPosition != null ? int.tryParse(readingPosition) : null,
+              });
             } catch (e) {
               debugPrint('LocalBackupService: Error parsing entry: $e');
             }
@@ -653,6 +802,19 @@ class LocalBackupService {
             try {
               if (merge) {
                 await articleDao.upsertArticles(feedItems);
+                // upsertArticles doesn't restore isRead/isBookmarked, so update them separately
+                for (final state in articleStates) {
+                  await db.update(
+                    'articles',
+                    {
+                      'isRead': state['isRead'],
+                      'isBookmarked': state['isBookmarked'],
+                      if (state['readingPosition'] != null) 'readingPosition': state['readingPosition'],
+                    },
+                    where: 'id = ?',
+                    whereArgs: [state['id']],
+                  );
+                }
               } else {
                 for (final item in feedItems) {
                   await db.insert('articles', item.toMap());

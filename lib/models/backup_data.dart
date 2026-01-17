@@ -37,12 +37,14 @@ class BackupContent {
   final List<ArticleMetadata> articles;
   final Map<String, dynamic> settings;
   final Map<String, Map<String, String>> cookies;
+  final List<DeletedArticleEntry> deletedArticles;
 
   BackupContent({
     required this.feedSources,
     required this.articles,
     required this.settings,
     required this.cookies,
+    this.deletedArticles = const [],
   });
 
   Map<String, dynamic> toJson() {
@@ -51,6 +53,7 @@ class BackupContent {
       'articles': articles.map((a) => a.toJson()).toList(),
       'settings': settings,
       'cookies': cookies,
+      'deletedArticles': deletedArticles.map((d) => d.toJson()).toList(),
     };
   }
 
@@ -71,6 +74,33 @@ class BackupContent {
           ),
         ),
       ),
+      deletedArticles: (json['deletedArticles'] as List?)
+          ?.map((item) => DeletedArticleEntry.fromJson(item as Map<String, dynamic>))
+          .toList() ?? [],
+    );
+  }
+}
+
+class DeletedArticleEntry {
+  final String id;
+  final int deletedAtMillis;
+
+  DeletedArticleEntry({
+    required this.id,
+    required this.deletedAtMillis,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'deletedAtMillis': deletedAtMillis,
+    };
+  }
+
+  factory DeletedArticleEntry.fromJson(Map<String, dynamic> json) {
+    return DeletedArticleEntry(
+      id: json['id'] as String,
+      deletedAtMillis: json['deletedAtMillis'] as int,
     );
   }
 }
