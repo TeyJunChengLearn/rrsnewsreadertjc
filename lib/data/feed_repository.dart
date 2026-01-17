@@ -129,12 +129,20 @@ class FeedRepository {
     return await articleDao.getAllArticles();
   }
   Future<Map<String, ArticleReadabilityResult>> populateArticleContent(
-    List<FeedItem> items,
-  ) async {
+    List<FeedItem> items, {
+    bool useWebView = true,
+    int delayTime = 10,
+  }) async {
     if (articleContentService == null) {
       return {};
     }
-    return await articleContentService!.backfillMissingContent(items);
+    // Use WebView with 10s delay by default (like Java's TtsExtractor)
+    // This helps capture paywalled content that requires JS to load
+    return await articleContentService!.backfillMissingContent(
+      items,
+      useWebView: useWebView,
+      delayTime: delayTime,
+    );
   }
   // ---------------------------------------------------------------------------
   // CLEANUP
